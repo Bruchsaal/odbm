@@ -1,0 +1,12 @@
+__pycache__
+__trash__
+venv
+history_*
+build
+dist
+*.spec
+connections.json
+collector.json
+.odbm_key
+*.db
+.pytest_cache

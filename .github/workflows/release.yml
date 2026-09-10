@@ -1,0 +1,96 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on tags like v1.0, v2.3.1
+
+permissions:
+  contents: write # Needed to create releases
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Linux (Covers Debian, Ubuntu, etc.)
+          - os: ubuntu-22.04
+            artifact_name: odbm
+            asset_name: odbm
+            sep: ':' # Separator for PyInstaller add-data on Linux
+          
+          # Windows
+          - os: windows-latest
+            artifact_name: odbm.exe
+            asset_name: odbm.exe
+            sep: ';' # Separator for PyInstaller add-data on Windows
+          
+          # macOS (New Addition)
+          - os: macos-latest
+            artifact_name: odbm-macos
+            asset_name: odbm-macos
+            sep: ':' # Separator for PyInstaller add-data on macOS is same as Linux
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11' 
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Run tests
+      run: |
+        pip install pytest httpx
+        python -m pytest -q
+
+    - name: Build with PyInstaller
+      shell: bash
+      run: |
+        # Single-file executable. connections.json is deliberately NOT bundled:
+        # it holds credentials and is created empty on first run instead.
+        pyinstaller --onefile --clean --name "${{ matrix.artifact_name }}" \
+          --add-data "static${{ matrix.sep }}static" \
+          --add-data "queries.json${{ matrix.sep }}." \
+          --add-data "settings.json${{ matrix.sep }}." \
+          --add-data "LICENSE${{ matrix.sep }}." \
+          --add-data "THIRD-PARTY-NOTICES.md${{ matrix.sep }}." \
+          --add-data "COPYRIGHT${{ matrix.sep }}." \
+          --collect-all cryptography \
+          main.py
+
+    - name: Upload Artifact to Workflow
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.asset_name }}
+        path: dist/${{ matrix.artifact_name }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/odbm/odbm
+            artifacts/odbm.exe/odbm.exe
+            artifacts/odbm-macos/odbm-macos
+          draft: false
+          prerelease: false
+          generate_release_notes: true

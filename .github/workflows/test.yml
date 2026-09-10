@@ -1,0 +1,40 @@
+name: Tests
+
+# The release workflow only fires on v* tags, so without this a pull request
+# gets no signal at all.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      # The frontend escaping tests skip without node; ubuntu-latest ships it,
+      # so fail loudly if they were silently skipped.
+      - name: Confirm frontend tests ran
+        run: |
+          node --version
+          python -m pytest tests/test_frontend.py -q --no-header -rs 2>&1 | tee /tmp/fe.txt
+          if grep -q "skipped" /tmp/fe.txt; then
+            echo "::error::frontend tests were skipped"
+            exit 1
+          fi

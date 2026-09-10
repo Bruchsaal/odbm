@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oracle DB Monitor</title>
+    <script src="/static/lib/tailwind.js"></script>
+    <script src="/static/lib/apexcharts.js"></script>
+    <script defer src="/static/lib/alpine.js"></script>
+    <script src="/static/app.js"></script>
+
+    <style>
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        td, th { padding: 0.25rem 0.5rem !important; font-size: 0.75rem !important; white-space: nowrap; }
+        [x-cloak] { display: none !important; }
+        .resize-handle { height: 6px; margin: 2px 0; cursor: row-resize; background-color: #e2e8f0; transition: all 0.2s; flex-shrink: 0; border-radius: 3px; }
+        .resize-handle:hover, .resize-handle:active { background-color: #3b82f6; height: 8px; margin: 1px 0; }
+        .resize-handle-v { width: 6px; margin: 0 2px; cursor: col-resize; background-color: #e2e8f0; transition: all 0.2s; flex-shrink: 0; border-radius: 3px; }
+        .resize-handle-v:hover, .resize-handle-v:active { background-color: #3b82f6; width: 8px; margin: 0 1px; }
+    </style>
+</head>
+<body class="bg-gray-200 h-screen flex overflow-hidden text-sm font-sans" x-data="dashboard()" x-cloak>
+
+<aside class="w-64 bg-slate-900 text-slate-300 flex flex-col shadow-xl shrink-0 z-20">
+        <div class="p-4 bg-slate-950 border-b border-slate-800 flex justify-center">
+            <div class="font-bold text-lg text-white tracking-tight flex items-center gap-2">
+                <img src="/static/ODBM.png" class="h-6 w-auto" alt="ODBM">
+                <span>ODBM</span><span class="text-xs text-blue-400 font-normal self-end mb-1">v2.1</span>
+            </div>
+        </div>
+
+        <div class="p-4 border-b border-slate-800">
+            <div class="flex justify-between items-center mb-2">
+                <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Database</label>
+                <div class="flex items-center gap-2" x-show="selectedConnIndex >= 0">
+                    <span class="w-1.5 h-1.5 rounded-full transition-colors duration-300" :class="statusColorClass"></span>
+                    <span class="text-[10px] text-slate-500 italic truncate max-w-[80px]" x-text="statusMessage"></span>
+                </div>
+            </div>
+            <select x-model="selectedConnIndex" @change="switchConnection()" class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded px-2 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
+                <template x-for="(conn, index) in config.connections" :key="index"><option :value="index" x-text="conn.name"></option></template>
+                <option value="-1" x-show="config.connections.length === 0">No Connections</option>
+            </select>
+            <div class="mt-2 text-xs text-slate-400 font-mono truncate text-center" x-text="activeConnectionString"></div>
+        </div>
+
+        <nav class="flex-1 overflow-y-auto py-4 space-y-1 px-2">
+            <button @click="switchTab('dashboard')" :class="navClass('dashboard')" class="w-full justify-center px-3 py-2 rounded-md transition-all flex items-center gap-3 relative"><span class="absolute left-3 text-lg">📊</span><span class="w-full text-center font-medium">Dashboard</span></button>
+            <button @click="switchTab('details')" :class="navClass('details')" class="w-full justify-center px-3 py-2 rounded-md transition-all flex items-center gap-3 relative"><span class="absolute left-3 text-lg">🔍</span><span class="w-full text-center font-medium">Details</span></button>
+            
+            <button x-show="collectorActive || hasHistory" @click="switchTab('graphs')" :class="navClass('graphs')" class="w-full justify-center px-3 py-2 rounded-md transition-all flex items-center gap-3 relative" x-transition>
+                <span class="absolute left-3 text-lg">📈</span><span class="w-full text-center font-medium">History</span>
+            </button>
+
+            <button @click="switchTab('sessions')" :class="navClass('sessions')" class="w-full justify-center px-3 py-2 rounded-md transition-all flex items-center gap-3 relative"><span class="absolute left-3 text-lg">👥</span><span class="w-full text-center font-medium">Sessions</span></button>
+            <button @click="switchTab('custom')" :class="navClass('custom')" class="w-full justify-center px-3 py-2 rounded-md transition-all flex items-center gap-3 relative"><span class="absolute left-3 text-lg">📝</span><span class="w-full text-center font-medium">Custom SQL</span></button>
+            <button @click="switchTab('library')" :class="navClass('library')" class="w-full justify-center px-3 py-2 rounded-md transition-all flex items-center gap-3 relative"><span class="absolute left-3 text-lg">📚</span><span class="w-full text-center font-medium">SQL Lib</span></button>
+            <div class="my-4 border-t border-slate-800 mx-2"></div>
+            <button @click="switchTab('settings')" :class="navClass('settings')" class="w-full justify-center px-3 py-2 rounded-md transition-all flex items-center gap-3 relative"><span class="absolute left-3 text-lg">⚙️</span><span class="w-full text-center font-medium">Settings</span></button>
+            <button @click="switchTab('logs')" :class="navClass('logs')" class="w-full justify-center px-3 py-2 rounded-md transition-all flex items-center gap-3 relative group"><span class="absolute left-3 text-lg">📜</span><span class="w-full text-center font-medium">Logs</span><span x-show="errorCount > 0" class="absolute right-2 bg-red-500 text-white text-[10px] px-1.5 rounded-full font-bold" x-text="errorCount"></span></button>
+        </nav>
+
+        <div class="p-4 border-t border-slate-800 bg-slate-900/50">
+            <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2 justify-center">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>Host Resources
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <div class="bg-slate-800 p-2 rounded border border-slate-700 flex flex-col items-center"><span class="text-[10px] text-slate-400">CPUs</span><span class="text-white font-mono font-bold" x-text="sysInfoParsed.cpus"></span></div>
+                <div class="bg-slate-800 p-2 rounded border border-slate-700 flex flex-col items-center"><span class="text-[10px] text-slate-400">Cores</span><span class="text-white font-mono font-bold" x-text="sysInfoParsed.cores"></span></div>
+                <div class="bg-slate-800 p-2 rounded border border-slate-700 flex flex-col items-center"><span class="text-[10px] text-slate-400">Sockets</span><span class="text-white font-mono font-bold" x-text="sysInfoParsed.sockets"></span></div>
+                <div class="bg-slate-800 p-2 rounded border border-slate-700 flex flex-col items-center"><span class="text-[10px] text-slate-400">RAM</span><span class="text-white font-mono font-bold text-xs" x-text="sysInfoParsed.ram"></span></div>
+            </div>
+        </div>
+
+        <div class="p-4 bg-slate-950 border-t border-slate-800">
+            <div class="flex flex-col gap-2">
+                <div class="flex items-center justify-between text-xs text-slate-500">
+                    <span title="How often the dashboard redraws">View refresh:</span>
+                    <select x-model="collectorInterval" class="bg-slate-800 border border-slate-700 text-white rounded px-1 py-0.5 text-[10px] outline-none">
+                        <option value="5">5s</option>
+                        <option value="10">10s</option>
+                        <option value="30">30s</option>
+                        <option value="60">60s</option>
+                    </select>
+                </div>
+                <div class="flex items-center justify-between text-xs text-slate-500">
+                    <span title="How often the server records history, with no browser open">Collect every:</span>
+                    <select x-model.number="collector.interval" @change="setCollector(collector.enabled, collector.interval)" class="bg-slate-800 border border-slate-700 text-white rounded px-1 py-0.5 text-[10px] outline-none">
+                        <option value="30">30s</option>
+                        <option value="60">60s</option>
+                        <option value="300">5m</option>
+                        <option value="900">15m</option>
+                    </select>
+                </div>
+
+                <div class="flex justify-between items-center">
+                    <span class="text-xs font-bold text-slate-400 uppercase tracking-wider" title="Runs on the server; keeps recording with the browser closed">Data Collector</span>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" x-model="collectorActive" class="sr-only peer" @change="toggleCollector()">
+                        <div class="w-8 h-4 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-green-600"></div>
+                    </label>
+                </div>
+                <div x-show="collector.enabled" x-cloak class="text-[10px] text-slate-500 leading-snug">
+                    <span x-text="collector.connections.length"></span>
+                    <span x-text="collector.connections.length === 1 ? 'database' : 'databases'"></span>
+                    &middot; last <span x-text="collector.last_run || '-'"></span>
+                    <span class="block text-slate-600" x-text="collector.samples + ' samples in ' + collector.cycles + ' cycles'"></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="group px-4 py-2.5 bg-slate-950 border-t border-slate-800 text-[10px] text-slate-500 select-none">
+            <div class="h-4 overflow-hidden">
+                <!-- Slides up on hover (and on keyboard focus, so the links stay reachable). -->
+                <div class="transition-transform duration-200 ease-out group-hover:-translate-y-4 group-focus-within:-translate-y-4">
+                    <div class="h-4 leading-4 flex items-center">
+                        <span>ODBM Licenses</span>
+                        <span class="ml-auto text-slate-700 transition-opacity duration-200 group-hover:opacity-0" aria-hidden="true">&#9650;</span>
+                    </div>
+                    <div class="h-4 leading-4 flex items-center gap-1.5 whitespace-nowrap">
+                        <a href="/licenses/agpl" target="_blank" rel="noopener" title="GNU Affero General Public License v3.0" class="text-slate-400 hover:text-blue-400 underline">AGPL-3.0</a>
+                        <span class="text-slate-700">&middot;</span>
+                        <a href="https://github.com/Bruchsaal/odbm" target="_blank" rel="noopener" title="Source code on GitHub" class="text-slate-400 hover:text-blue-400 underline">Source</a>
+                        <span class="text-slate-700">&middot;</span>
+                        <a href="/licenses/third-party" target="_blank" rel="noopener" title="Third-party notices" class="text-slate-400 hover:text-blue-400 underline">Notices</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <div class="flex-1 flex flex-col h-full overflow-hidden bg-gray-200">
+        <main class="flex-1 overflow-hidden p-3 flex flex-col relative" @mouseup.window="resizeStop()" @mousemove.window="resizeMove($event)">
+            
+            <div x-show="currentTab === 'dashboard'" class="h-full flex flex-col gap-3 overflow-hidden">
+
+                <div x-show="alerts.count > 0" x-cloak :class="alertBannerClass" class="shrink-0 rounded border px-4 py-2 text-xs">
+                    <div class="flex items-center gap-2 cursor-pointer" @click="alertsOpen = !alertsOpen">
+                        <span class="font-bold" x-text="alerts.worst === 'CRIT' ? 'Critical' : 'Warning'"></span>
+                        <span x-text="alerts.count + (alerts.count === 1 ? ' threshold exceeded' : ' thresholds exceeded')"></span>
+                        <span class="ml-auto text-[10px] opacity-60" x-text="alertsOpen ? 'hide' : 'show'"></span>
+                    </div>
+                    <div x-show="alertsOpen" x-cloak class="mt-2 border-t border-current/20 pt-2 space-y-1 max-h-32 overflow-auto">
+                        <template x-for="a in alerts.alerts" :key="a.key">
+                            <div class="flex items-center gap-2 font-mono text-[10px]">
+                                <span class="font-bold w-10" :class="a.severity === 'CRIT' ? 'text-red-700' : 'text-amber-700'" x-text="a.severity"></span>
+                                <span class="w-40 truncate" x-text="a.label || a.title"></span>
+                                <span class="opacity-70" x-text="a.metric"></span>
+                                <span class="font-bold ml-auto" x-text="a.value"></span>
+                                <span class="opacity-60" x-text="'(' + a.direction + ' ' + (a.severity === 'CRIT' ? a.crit : a.warn) + ')'"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <div x-show="dbInfo.warning" x-cloak class="shrink-0 rounded border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900 flex items-start gap-2">
+                    <span class="font-bold shrink-0">Container scope:</span>
+                    <div class="min-w-0">
+                        <span x-text="dbInfo.warning"></span>
+                        <div x-show="dbInfo.grant_hint" x-cloak class="mt-1 font-mono text-[10px] text-amber-800 break-all" x-text="dbInfo.grant_hint"></div>
+                    </div>
+                </div>
+    
+<div class="grid grid-cols-4 gap-3 shrink-0 h-32">
+<div class="bg-white rounded shadow-sm border border-gray-300 p-3 relative overflow-hidden flex flex-col">
+    <h3 class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1" x-text="getWidgetTitle('avail_status', 'Instance Status')"></h3>
+    
+    <div class="flex-1 flex items-center justify-center">
+        <template x-if="data.avail01 && data.avail01.length > 0 && !data.avail01[0].error">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full flex items-center justify-center text-xl shadow-inner shrink-0"
+                     :class="data.avail01[0].STATUS === 'OPEN' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'">
+                     <span x-text="data.avail01[0].STATUS === 'OPEN' ? '✔' : '⚠'"></span>
+                </div>
+                <div class="text-xl font-bold text-gray-800" x-text="data.avail01[0].INSTANCE_NAME"></div>
+                <div class="text-[10px] font-mono px-2 py-0.5 rounded border"
+                     :class="data.avail01[0].STATUS === 'OPEN' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'"
+                     x-text="data.avail01[0].STATUS"></div>
+            </div>
+        </template>
+        <template x-if="!data.avail01 || data.avail01.length === 0">
+            <div class="text-xs text-gray-400 italic">Connecting...</div>
+        </template>
+    </div>
+</div>
+
+        <div class="bg-white rounded shadow-sm border border-gray-300 p-3 relative flex flex-col">
+             <div class="absolute top-2 right-2 cursor-pointer text-gray-300 hover:text-blue-500" @click="refreshWidget('perf_active')">↻</div>
+             <h3 class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1" x-text="getWidgetTitle('perf_active', 'Session Load')"></h3>
+             <div class="flex-1 flex items-center justify-around">
+                 <div class="text-center">
+                     <div class="text-3xl font-bold text-blue-600 leading-none" x-text="sessionCount('Active')">0</div>
+                     <div class="text-[9px] text-gray-400 font-bold uppercase mt-1">Active</div>
+                 </div>
+                 <div class="h-8 w-px bg-gray-200"></div>
+                 <div class="text-center opacity-60">
+                     <div class="text-xl font-bold text-gray-600 leading-none" x-text="sessionCount('Inactive')">0</div>
+                     <div class="text-[9px] text-gray-400 uppercase mt-1">Inactive</div>
+                 </div>
+             </div>
+        </div>
+
+        <div class="bg-white rounded shadow-sm border border-gray-300 p-3 relative flex flex-col">
+            <div class="absolute top-2 right-2 cursor-pointer text-gray-300 hover:text-blue-500" @click="refreshWidget('aas')">↻</div>
+            <h3 class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1" x-text="getWidgetTitle('aas', 'Avg Active Sessions')"></h3>
+            <div class="flex-1 flex flex-col items-center justify-center">
+                <template x-if="data.aas && data.aas.length > 0">
+                    <div class="text-center">
+                        <div class="text-4xl font-bold text-blue-600 tracking-tighter leading-none" x-text="parseFloat(data.aas[0].AVG_ACT_SESS || 0).toFixed(2)"></div>
+                        <div class="text-[9px] text-gray-400 mt-1 uppercase">AAS</div>
+                    </div>
+                </template>
+                <template x-if="!data.aas || data.aas.length === 0"><div class="text-gray-300 text-xs">...</div></template>
+            </div>
+        </div>
+
+        <div class="bg-white rounded shadow-sm border border-gray-300 flex flex-col overflow-hidden">
+            <div class="bg-gray-50 px-2 py-1 border-b border-gray-200 text-[10px] font-bold text-gray-500 uppercase flex justify-between"><span x-text="getWidgetTitle('latency', 'Latency')"></span><button @click="refreshWidget('latency')" class="text-gray-400 hover:text-blue-600 px-1">↻</button></div>
+            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(data.latency)" x-html="html"></div>
+        </div>
+        
+    </div>
+
+    <div x-show="data.perf02 && data.perf02.length > 0 && !data.perf02[0].error" class="shrink-0">
+        <div class="bg-red-50 border border-red-200 rounded shadow-sm overflow-hidden flex flex-col max-h-32">
+            <div class="bg-red-100 px-3 py-1 border-b border-red-200 text-xs font-bold text-red-800 flex justify-between items-center">
+                <span class="flex items-center gap-2" x-text="getWidgetTitle('perf_blocking', 'BLOCKING SESSIONS')"></span>
+                <button @click="refreshWidget('perf_blocking')" class="text-red-600 hover:text-red-800 text-[10px]">Refresh</button>
+            </div>
+            <div class="overflow-auto" x-data="autoTable()" x-effect="initTable(data.perf02)" x-html="html"></div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-4 gap-3 h-56 shrink-0">
+        <div class="col-span-1 bg-white rounded shadow-sm border border-gray-300 flex flex-col overflow-hidden">
+            <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 text-[10px] font-bold text-gray-500 uppercase flex justify-between">
+                <span x-text="getWidgetTitle('space_visual', 'Tablespace Usage %')"></span>
+                <button @click="refreshWidget('space_visual')" class="text-gray-400 hover:text-blue-600 px-1">↻</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-3 space-y-3">
+                <template x-for="ts in data.space01" :key="ts.TABLESPACE_NAME">
+                    <div>
+                        <div class="flex justify-between text-[10px] mb-0.5">
+                            <span class="font-bold text-gray-600 truncate w-24" x-text="ts.TABLESPACE_NAME"></span>
+                            <span :class="ts['Usage %'] > 90 ? 'text-red-600 font-bold' : 'text-gray-500'" x-text="ts['Usage %'] + '%'"></span>
+                        </div>
+                        <div class="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                            <div class="h-full rounded-full transition-all duration-500"
+                                 :class="ts['Usage %'] > 90 ? 'bg-red-500' : (ts['Usage %'] > 80 ? 'bg-yellow-500' : 'bg-blue-500')"
+                                 :style="`width: ${ts['Usage %']}%`"></div>
+                        </div>
+                    </div>
+                </template>
+                <div x-show="!data.space01 || data.space01.length === 0" class="text-center text-xs text-gray-400 italic mt-4">Loading...</div>
+            </div>
+        </div>
+
+        <div class="col-span-3 bg-white rounded shadow-sm border border-gray-300 flex flex-col overflow-hidden relative group">
+            <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 text-[10px] font-bold text-gray-500 uppercase flex justify-between items-center">
+                <span x-text="getWidgetTitle('detailed_storage', 'Detailed Storage')"></span>
+                <div class="relative" x-data="{ open: false }">
+                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                        <a @click="refreshWidget('detailed_storage'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                        <a @click="jumpToEditor('detailed_storage')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                        <a @click="openWidgetManager('detailed_storage'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                    </div>
+                </div>
+            </div>
+            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.tablespaces.usage)" x-html="html"></div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-4 gap-3 flex-1 min-h-0">
+        <div class="col-span-1 bg-white rounded shadow-sm border border-gray-300 flex flex-col overflow-hidden relative">
+            <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 text-[10px] font-bold text-gray-500 uppercase flex justify-between items-center">
+                <span x-text="getWidgetTitle('owner_space', 'Space by Owner')"></span>
+                <div class="relative" x-data="{ open: false }">
+                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                        <a @click="refreshWidget('owner_space'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                        <a @click="jumpToEditor('owner_space')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                        <a @click="openWidgetManager('owner_space'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                    </div>
+                </div>
+            </div>
+            <div class="flex-1 overflow-auto relative" x-data="autoTable()" x-effect="initTable(data.ownerSpace)" x-html="html"></div>
+        </div>
+
+        <div class="col-span-3 bg-white rounded shadow-sm border border-gray-300 flex flex-col overflow-hidden relative group">
+            <div class="bg-gray-50 px-3 py-2 border-b border-gray-200 text-[10px] font-bold text-gray-500 uppercase flex justify-between items-center">
+                <span x-text="getWidgetTitle('wait_classes', 'Wait Classes (%)')"></span>
+                <div class="relative" x-data="{ open: false }">
+                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                        <a @click="refreshWidget('wait_classes'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                        <a @click="jumpToEditor('wait_classes')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                        <a @click="openWidgetManager('wait_classes'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                    </div>
+                </div>
+            </div>
+            <div class="flex-1 overflow-auto relative" x-data="autoTable()" x-effect="initTable(data.waitClasses)" x-html="html"></div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-4 gap-3 h-40 shrink-0 pb-1">
+        
+        <div class="bg-white rounded shadow-sm border border-gray-300 p-3 flex flex-col relative">
+             <div class="absolute top-2 right-2 cursor-pointer text-gray-300 hover:text-blue-500" @click="refreshWidget('avail_invalid')">↻</div>
+             <h3 class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1" x-text="getWidgetTitle('avail_invalid', 'Invalid Objects')"></h3>
+             <div class="flex-1 flex items-center justify-center">
+                 <template x-if="data.avail02 && data.avail02.length > 0">
+                     <div class="text-center">
+                         <div class="text-4xl font-bold leading-none" 
+                              :class="data.avail02[0].INVALID_COUNT > 0 ? 'text-red-600' : 'text-green-500'" 
+                              x-text="data.avail02[0].INVALID_COUNT"></div>
+                         <div x-show="data.avail02[0].INVALID_COUNT > 0" class="text-[9px] text-red-500 font-bold mt-1 uppercase bg-red-50 px-2 py-0.5 rounded-full">Action Required</div>
+                     </div>
+                 </template>
+                 <template x-if="!data.avail02 || data.avail02.length === 0"><div class="text-xs text-gray-300">...</div></template>
+             </div>
+        </div>
+
+        <div class="bg-white rounded shadow-sm border border-gray-300 flex flex-col overflow-hidden">
+            <div class="bg-gray-50 px-2 py-1 border-b border-gray-200 text-[10px] font-bold text-gray-500 uppercase flex justify-between"><span x-text="getWidgetTitle('used_space', 'Used Space')"></span><button @click="refreshWidget('used_space')" class="text-gray-400 hover:text-blue-600 px-1">↻</button></div>
+            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(data.usedSpace)" x-html="html"></div>
+        </div>
+
+        <div class="bg-white rounded shadow-sm border border-gray-300 flex flex-col overflow-hidden">
+            <div class="bg-gray-50 px-2 py-1 border-b border-gray-200 text-[10px] font-bold text-gray-500 uppercase flex justify-between"><span x-text="getWidgetTitle('fra', 'FRA Usage')"></span><button @click="refreshWidget('fra')" class="text-gray-400 hover:text-blue-600 px-1">↻</button></div>
+            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(data.fra)" x-html="html"></div>
+        </div>
+
+        <div class="bg-white rounded shadow-sm border border-gray-300 flex flex-col overflow-hidden">
+            <div class="bg-gray-50 px-2 py-1 border-b border-gray-200 text-[10px] font-bold text-gray-500 uppercase flex justify-between">
+                <span x-text="getWidgetTitle('asm_usage', 'ASM Usage %')"></span>
+                <button @click="refreshWidget('asm_usage')" class="text-gray-400 hover:text-blue-600 px-1">↻</button>
+            </div>
+            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(data.asm01)" x-html="html"></div>
+        </div>
+
+    </div>
+
+</div>
+
+            <div x-show="currentTab === 'details'" class="h-full flex flex-col gap-2">
+                <div class="flex border-b border-gray-300 bg-white shadow-sm overflow-x-auto shrink-0">
+                    <template x-for="tab in ['parameter', 'tablespaces', 'sqlstats', 'sqldetails', 'rman', 'usersprofiles', 'advanced', 'dbdump', 'longops']">
+                        <button @click="switchDetailTab(tab)" 
+                                :class="detailTab === tab ? 'border-b-2 border-blue-600 text-blue-600 font-bold bg-blue-50' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'"
+                                class="px-4 py-2 text-xs font-medium uppercase tracking-wide transition-colors whitespace-nowrap" 
+                                x-text="tab === 'usersprofiles' ? 'Users & Profiles' : tab === 'longops' ? 'Session Longops' : tab.replace('sql', 'SQL ').replace('db', 'DB ')"></button>
+                    </template>
+                </div>
+                <div class="flex-1 overflow-hidden relative">
+                    <div x-show="detailTab === 'parameter'" class="h-full flex flex-col" x-data="{ topGroup: {h: 400}, row1: {h: 200}, row3: {h: 200} }">
+                        <div :style="`height: ${topGroup.h}px`" class="flex flex-col shrink-0 min-h-0">
+                            <div :style="`height: ${row1.h}px`" class="bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col shrink-0">
+                                <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                    <span x-text="getWidgetTitle('sga', 'SGA')"></span>
+                                    <div class="relative" x-data="{ open: false }">
+                                        <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                        <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('sga'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('sga')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('sga'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.parameter.sga)" x-html="html"></div>
+                            </div><div class="resize-handle" @mousedown="resizeStart($event, 'h', row1)"></div>
+                            <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0">
+                                <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                    <span x-text="getWidgetTitle('pga', 'PGA')"></span>
+                                    <div class="relative" x-data="{ open: false }">
+                                        <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                        <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('pga'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('pga')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('pga'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.parameter.pga)" x-html="html"></div>
+                            </div>
+                        </div><div class="resize-handle" @mousedown="resizeStart($event, 'h', topGroup)"></div>
+                        <div class="flex-1 flex flex-col min-h-0">
+                            <div :style="`height: ${row3.h}px`" class="bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col shrink-0">
+                                <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                    <span x-text="getWidgetTitle('opti', 'Optimizer')"></span>
+                                    <div class="relative" x-data="{ open: false }">
+                                        <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                        <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('opti'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('opti')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('opti'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.parameter.opti)" x-html="html"></div>
+                            </div><div class="resize-handle" @mousedown="resizeStart($event, 'h', row3)"></div>
+                            <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0">
+                                <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                    <span x-text="getWidgetTitle('cursor', 'Cursor')"></span>
+                                    <div class="relative" x-data="{ open: false }">
+                                        <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                        <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('cursor'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('cursor')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('cursor'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.parameter.cursor)" x-html="html"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div x-show="detailTab === 'tablespaces'" class="h-full flex flex-col" x-data="{ h: 300 }">
+                        <div :style="`height: ${h}px`" class="bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col shrink-0">
+                             <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('detailed_storage', 'Tablespace Usage')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('detailed_storage'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('detailed_storage')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('detailed_storage'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                             </div>
+                             <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.tablespaces.usage)" x-html="html"></div>
+                        </div>
+                        <div class="resize-handle" @mousedown="resizeStart($event, 'h', $data)"></div>
+                        <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0">
+                             <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('datafiles', 'Datafiles')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('datafiles'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('datafiles')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('datafiles'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                             </div>
+                             <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.tablespaces.datafiles)" x-html="html"></div>
+                        </div>
+                    </div>
+                    <div x-show="detailTab === 'sqlstats'" class="h-full flex flex-col" x-data="{ h: 300 }">
+                        <div :style="`height: ${h}px`" class="bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col shrink-0">
+                            <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('sql_summary', 'Summary Execution Time (Top)')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('sql_summary'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('sql_summary')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('sql_summary'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.sqlStats.summary)" x-html="html"></div>
+                        </div>
+                        <div class="resize-handle" @mousedown="resizeStart($event, 'h', $data)"></div>
+                        <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0">
+                            <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('sql_single', 'Single Execution Time (Top)')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('sql_single'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('sql_single')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('sql_single'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.sqlStats.single)" x-html="html"></div>
+                        </div>
+                    </div>
+                    <div x-show="detailTab === 'sqldetails'" class="h-full flex flex-col" x-data="{ h: 300 }"><div class="p-2 mb-2 flex gap-4 items-center bg-white border border-gray-300 rounded shadow-sm shrink-0"><label class="text-xs font-bold text-gray-600">SQL ID:</label><input type="text" x-model="details.sqlDetails.sqlIdInput" class="border p-1 rounded text-xs w-48 font-mono" placeholder="e.g. 520mkxq87v5qj"><button @click="fetchSqlDetails()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-blue-700">Load</button></div><div :style="`height: ${h}px`" class="bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col shrink-0"><div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700">Execution Plan</div><div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.sqlDetails.plan)" x-html="html"></div></div><div class="resize-handle" @mousedown="resizeStart($event, 'h', $data)"></div><div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0"><div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700">Full Text</div><div class="flex-1 overflow-auto p-2 font-mono text-xs" x-data="autoTable()" x-effect="initTable(details.sqlDetails.text)" x-html="html"></div></div></div>
+                    <div x-show="detailTab === 'rman'" class="h-full flex flex-col gap-2">
+                        <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0">
+                            <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('rman_backups', 'Full Backups')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('rman_backups'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('rman_backups')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('rman_backups'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.rman.backups)" x-html="html"></div>
+                        </div>
+                        <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0">
+                            <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('rman_errors', 'Errors')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('rman_errors'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('rman_errors')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('rman_errors'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.rman.errors)" x-html="html"></div>
+                        </div>
+                        <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0">
+                            <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('rman_list', 'All Backups')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('rman_list'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('rman_list')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('rman_list'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.rman.list)" x-html="html"></div>
+                        </div>
+                    </div>
+                    <div x-show="detailTab === 'usersprofiles'" class="h-full flex flex-col" x-data="{ h: 300 }">
+                        <div :style="`height: ${h}px`" class="bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col shrink-0">
+                            <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('users', 'DB Users')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('users'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('users')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('users'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.usersProfiles.users)" x-html="html"></div>
+                        </div>
+                        <div class="resize-handle" @mousedown="resizeStart($event, 'h', $data)"></div>
+                        <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0">
+                            <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('profiles', 'Profiles')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('profiles'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('profiles')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('profiles'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.usersProfiles.profiles)" x-html="html"></div>
+                        </div>
+                    </div>
+                    <div x-show="detailTab === 'advanced'" class="h-full flex flex-col" x-data="{ h: 300 }">
+                        <div :style="`height: ${h}px`" class="bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col shrink-0">
+                             <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('advisor', 'Segment Advisor')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('advisor'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('advisor')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('advisor'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                             </div>
+                             <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.advanced.advisor)" x-html="html"></div>
+                        </div>
+                        <div class="resize-handle" @mousedown="resizeStart($event, 'h', $data)"></div>
+                        <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0">
+                             <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('alerts', 'Alert Log')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('alerts'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('alerts')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('alerts'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                             </div>
+                             <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.advanced.alerts)" x-html="html"></div>
+                        </div>
+                    </div>
+                    <div x-show="detailTab === 'dbdump'" class="h-full flex flex-col" x-data="{ h: 300 }">
+                        <div :style="`height: ${h}px`" class="bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col shrink-0">
+                            <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('dp_jobs', 'Datapump Jobs')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('dp_jobs'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('dp_jobs')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('dp_jobs'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.dbDump.jobs)" x-html="html"></div>
+                        </div>
+                        <div class="resize-handle" @mousedown="resizeStart($event, 'h', $data)"></div>
+                        <div class="flex-1 flex gap-2 min-h-0">
+                            <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col">
+                                <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                    <span x-text="getWidgetTitle('dp_sessions', 'Datapump Sessions')"></span>
+                                    <div class="relative" x-data="{ open: false }">
+                                        <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                        <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('dp_sessions'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('dp_sessions')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('dp_sessions'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.dbDump.sessions)" x-html="html"></div>
+                            </div>
+                            <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col">
+                                <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                    <span x-text="getWidgetTitle('resumable', 'DBA Resumable')"></span>
+                                    <div class="relative" x-data="{ open: false }">
+                                        <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                        <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('resumable'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('resumable')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('resumable'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.dbDump.resumable)" x-html="html"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div x-show="detailTab === 'longops'" class="h-full flex flex-col">
+                        <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col min-h-0">
+                            <div class="bg-gray-50 px-3 py-1 border-b border-gray-200 text-xs font-bold text-gray-700 flex justify-between">
+                                <span x-text="getWidgetTitle('longops', 'Session Longops (&lt; 100%)')"></span>
+                                <div class="relative" x-data="{ open: false }">
+                                    <button @click="open = !open" @click.outside="open = false" class="text-gray-400 hover:text-blue-600 px-1 font-bold">⋮</button>
+                                    <div x-show="open" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 shadow-lg rounded z-50 w-32 py-1" x-cloak>
+                                            <a @click="refreshWidget('longops'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Refresh</a>
+                                            <a @click="jumpToEditor('longops')" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer">Edit SQL</a>
+                                            <a @click="openWidgetManager('longops'); open=false" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-blue-50 cursor-pointer border-t border-gray-100">Change SQL</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(details.longops.data)" x-html="html"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div x-show="currentTab === 'graphs'" class="h-full flex flex-col gap-4 bg-white p-6 rounded shadow-sm border border-gray-300 overflow-hidden" 
+                 x-data="graphController()" id="graph-root">
+                
+                <div class="flex justify-between items-center border-b border-gray-200 pb-4 shrink-0">
+                    <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2">History</h2>
+                    
+                    <div class="flex items-center gap-2 bg-gray-100 p-1 rounded-lg border border-gray-300 shadow-inner">
+                        <button @click="changeDate(-1)" class="w-8 h-8 flex items-center justify-center bg-white rounded border border-gray-300 text-gray-600 hover:text-blue-600 hover:border-blue-400 font-bold transition-all shadow-sm">‹</button>
+                        
+                        <div class="relative">
+                            <input type="date" x-model="selectedDate" class="bg-transparent border-none text-gray-700 text-sm font-bold focus:ring-0 cursor-pointer text-center w-32">
+                        </div>
+                        
+                        <button @click="changeDate(1)" class="w-8 h-8 flex items-center justify-center bg-white rounded border border-gray-300 text-gray-600 hover:text-blue-600 hover:border-blue-400 font-bold transition-all shadow-sm">›</button>
+                    </div>
+
+                    <div class="flex gap-3">
+                        <select x-model="selectedSource" class="border p-2 rounded text-sm w-48 bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">Select Source...</option>
+                            <template x-for="src in sources" :key="src"><option :value="src" x-text="src"></option></template>
+                        </select>
+                        <select x-model="selectedMetric" class="border p-2 rounded text-sm w-48 bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500" :disabled="!selectedSource">
+                            <option value="">All Metrics (Multi-Line)</option>
+                            <template x-for="m in metrics" :key="m"><option :value="m" x-text="m"></option></template>
+                        </select>
+                        <button @click="fetchInspectorData()" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded text-sm border font-medium" title="View Raw DB Data" :disabled="!selectedSource">Data</button>
+                    </div>
+                </div>
+
+                <div class="flex-1 relative min-h-0 bg-gray-50 border border-gray-200 rounded p-4">
+                    <div id="historyChart" class="w-full h-full"></div>
+                    <div x-show="!selectedSource" class="absolute inset-0 flex items-center justify-center text-gray-400 italic">Select a Data Source to visualize history.</div>
+                </div>
+
+                <div x-show="inspectorOpen" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center" @click.self="inspectorOpen = false" x-cloak>
+                    <div class="bg-white rounded-lg shadow-xl w-3/4 h-3/4 flex flex-col p-6">
+                        <div class="flex justify-between items-center mb-4"><h3 class="font-bold">Raw History Data</h3><button @click="inspectorOpen=false">✕</button></div>
+                        <pre class="flex-1 overflow-auto bg-gray-100 p-4 text-xs font-mono" x-text="rawJson"></pre>
+                        <div class="mt-4 flex justify-end">
+                             <button @click="fetchInspectorData()" class="bg-blue-600 text-white px-4 py-2 rounded text-xs font-bold hover:bg-blue-700 shadow-sm">Refresh Data</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div x-show="currentTab === 'sessions'" class="h-full bg-white rounded shadow-sm border border-gray-300 flex flex-col overflow-hidden">
+                <div class="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
+                    <h3 class="font-bold text-gray-700" x-text="getWidgetTitle('sessions_tab', 'Avg Act Session')"></h3>
+                    <div class="flex gap-2">
+                        <button @click="jumpToEditor('sessions_tab')" class="text-xs bg-white border px-2 py-1 rounded hover:bg-gray-100 shadow-sm text-slate-500">Edit SQL</button>
+                        <button @click="openWidgetManager('sessions_tab')" class="text-xs bg-white border px-2 py-1 rounded hover:bg-gray-100 shadow-sm text-slate-500">Change SQL</button>
+                        <button @click="fetchSessions()" class="text-xs bg-white border px-2 py-1 rounded hover:bg-gray-100 shadow-sm">Refresh</button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-auto" :key="sessionsUpdateKey" x-data="autoTable()" x-effect="initTable(sessionsData)" x-html="html"></div>
+            </div>
+
+            <div x-show="currentTab === 'custom'" class="h-full flex flex-col" @mousemove.window="resizeMove($event)" @mouseup.window="resizeStop()">
+                <div class="bg-white rounded shadow-sm border border-gray-300 p-3 flex flex-col gap-2 shrink-0" :style="`height: ${sqlPaneHeight}px; min-height: 100px; max-height: 80%`">
+                    
+                    <div class="flex justify-between items-center shrink-0">
+                        <div class="flex items-center gap-3">
+                            <div class="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
+                                <button @click="sqlMode = 'QUERY'" :class="sqlMode === 'QUERY' ? 'bg-white text-blue-600 shadow-sm font-bold' : 'text-gray-500 hover:text-gray-700'" class="px-3 py-1 rounded-md text-xs transition-all flex items-center gap-1"><span>🔍</span> Query</button>
+                                <button @click="sqlMode = 'COMMAND'" :class="sqlMode === 'COMMAND' ? 'bg-white text-orange-600 shadow-sm font-bold' : 'text-gray-500 hover:text-gray-700'" class="px-3 py-1 rounded-md text-xs transition-all flex items-center gap-1"><span>⚙️</span> Command</button>
+                            </div>
+                            <select x-model="selectedTemplate" @change="loadTemplate()" class="text-xs border border-gray-300 rounded px-2 py-1.5 w-64 bg-gray-50 outline-none focus:border-blue-500">
+                                <option value="" x-text="`Load Template (${filteredTemplates.length})...`"></option>
+                                <template x-for="item in filteredTemplates" :key="item.id"><option :value="item.id" x-text="item.desc"></option></template>
+                            </select>
+                        </div>
+                        <button @click="runCustomSql()" :class="sqlMode === 'QUERY' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-500 hover:bg-orange-600'" class="text-white px-6 py-1.5 rounded text-xs font-bold shadow-sm transition flex items-center gap-2"><span x-text="sqlMode === 'QUERY' ? 'Run Query' : 'Run Command'"></span><span class="opacity-50 font-normal">(Ctrl+Enter)</span></button>
+                    </div>
+
+                    <textarea x-model="customSql" @keydown.ctrl.enter="runCustomSql()" 
+                        class="w-full flex-1 border border-gray-300 rounded p-3 font-mono text-xs bg-gray-50 focus:ring-1 outline-none resize-none leading-relaxed transition-colors mt-2" 
+                        :class="sqlMode === 'QUERY' ? 'focus:ring-blue-500' : 'focus:ring-orange-500'" 
+                        :placeholder="sqlMode === 'QUERY' ? 'SELECT * FROM ...' : 'ALTER USER ...'"></textarea>
+                </div>
+                
+                <div class="resize-handle flex items-center justify-center group" @mousedown="resizeStart($event, 'local', $data)"><div class="w-12 h-1 bg-gray-300 rounded-full group-hover:bg-gray-500 transition-colors"></div></div>
+                
+                <div class="flex-1 bg-white rounded shadow-sm border border-gray-300 overflow-auto flex flex-col min-h-0 relative">
+                    <div x-show="sqlMode === 'QUERY'" class="flex-1 overflow-auto" x-data="autoTable()" x-effect="initTable(customResults)" x-html="html"></div>
+                    <div x-show="sqlMode === 'COMMAND'" class="flex-1 flex items-center justify-center p-8">
+                        <template x-if="commandResult">
+                            <div class="border rounded-lg p-6 max-w-lg w-full text-center shadow-sm" :class="commandResult.error ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'">
+                                <div class="text-2xl mb-2" x-text="commandResult.error ? '❌' : '✅'"></div>
+                                <h3 class="font-bold text-sm mb-1" :class="commandResult.error ? 'text-red-800' : 'text-green-800'" x-text="commandResult.error ? 'Execution Failed' : 'Success'"></h3>
+                                <div class="text-xs font-mono whitespace-pre-wrap break-words" :class="commandResult.error ? 'text-red-600' : 'text-green-700'" x-text="commandResult.error || commandResult.message"></div>
+                            </div>
+                        </template>
+                        <template x-if="!commandResult"><div class="text-gray-400 italic text-xs">Ready to execute command...</div></template>
+                    </div>
+                </div>
+            </div>
+
+            <div x-show="currentTab === 'library'" class="h-full bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col">
+                <div class="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center shrink-0">
+                    <h3 class="font-bold text-gray-700">SQL Library</h3>
+                    <div class="flex gap-2 items-center">
+                        <div class="relative">
+                            <input type="text" x-model="libSearch" class="text-xs border rounded p-1.5 w-48 pr-6 focus:ring-1 focus:ring-blue-500 outline-none" placeholder="Search ID or Desc...">
+                            <button x-show="libSearch" @click="libSearch = ''" class="absolute right-1.5 top-1.5 text-gray-400 hover:text-gray-600 text-xs font-bold leading-none">✕</button>
+                        </div>
+                        <button @click="resetLibrary()" class="bg-slate-200 text-slate-600 px-3 py-1.5 rounded text-xs font-bold hover:bg-slate-300" title="Re-import from XML">↻ Reimport</button>
+                        <button @click="openLibEditor()" class="bg-blue-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-blue-700 shadow-sm">+ Add Query</button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-auto p-0" x-show="!libEditing">
+                    <table class="w-full text-left border-collapse">
+                        <thead class="bg-gray-50 sticky top-0 shadow-sm"><tr><th class="border-b px-4 py-2 w-16 text-gray-600 text-xs font-bold uppercase">ID</th><th class="border-b px-4 py-2 text-gray-600 text-xs font-bold uppercase">Type</th><th class="border-b px-4 py-2 text-gray-600 text-xs font-bold uppercase">Description</th><th class="border-b px-4 py-2 text-gray-600 text-xs font-bold uppercase w-32 text-right">Actions</th></tr></thead>
+                        <tbody class="divide-y divide-gray-100">
+                            <template x-for="item in filteredLibrary" :key="item.id">
+                                <tr class="hover:bg-gray-50 group transition-colors">
+                                    <td class="px-4 py-3 font-mono text-xs text-blue-600 font-bold" x-text="item.id"></td>
+                                    <td class="px-4 py-3"><span class="text-[10px] px-2 py-1 rounded font-bold" :class="item.mode === 'COMMAND' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'" x-text="item.mode === 'COMMAND' ? 'CMD' : 'QRY'"></span></td>
+                                    <td class="px-4 py-3"><div class="font-medium text-gray-800 text-xs mb-1" x-text="item.desc"></div><div class="text-[10px] text-gray-400 font-mono truncate max-w-xl cursor-help" :title="item.sql" x-text="item.sql"></div></td>
+                                    <td class="px-4 py-3 text-right">
+                                        <button @click="testQuery(item)" class="text-green-600 hover:text-green-800 bg-green-50 hover:bg-green-100 px-2 py-1 rounded text-xs mr-1" title="Test Run">▶</button>
+                                        <button @click="openLibEditor(item)" class="text-slate-400 hover:text-blue-600 px-2 text-lg leading-none" title="Edit">✎</button>
+                                        <button @click="deleteLibItem(item.id)" class="text-slate-400 hover:text-red-600 px-2 text-lg leading-none" title="Delete">✕</button>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="flex-1 p-6 flex flex-col gap-4 bg-slate-50" x-show="libEditing">
+                    <div class="flex items-center justify-between border-b border-gray-200 pb-2"><h4 class="font-bold text-gray-700" x-text="isNewEntry ? 'New Query' : 'Edit Query'"></h4><button @click="libEditing = false" class="text-gray-500 text-xs hover:text-gray-800 font-medium">Cancel</button></div>
+                    <div class="grid grid-cols-4 gap-4">
+                        <div class="col-span-1"><label class="block text-xs font-bold text-gray-500 mb-1">ID</label><input type="text" x-model="libItem.id" class="w-full border p-2 rounded text-xs bg-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g. 101" :disabled="!isNewEntry"></div>
+                        <div class="col-span-1"><label class="block text-xs font-bold text-gray-500 mb-1">Type</label><select x-model="libItem.mode" class="w-full border p-2 rounded text-xs bg-white focus:ring-2 focus:ring-blue-500 outline-none"><option value="QUERY">Query (SELECT)</option><option value="COMMAND">Command (ALTER/DROP)</option></select></div>
+                        <div class="col-span-2"><label class="block text-xs font-bold text-gray-500 mb-1">Description</label><input type="text" x-model="libItem.desc" class="w-full border p-2 rounded text-xs bg-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Description..."></div>
+                        <div class="col-span-1"><label class="block text-xs font-bold text-gray-500 mb-1" title="Reuse a cached result for this many seconds. 0 disables caching.">Cache (sec)</label><input type="number" min="0" x-model.number="libItem.refreshOptimum" class="w-full border p-2 rounded text-xs bg-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0"></div>
+                        <div class="col-span-3"><label class="block text-xs font-bold text-gray-500 mb-1" title="Name this metric appears under in the Graphs tab. Leave empty to exclude it from history.">History Name <span class="font-normal text-gray-400">(empty = not recorded)</span></label><input type="text" x-model="libItem.historyName" class="w-full border p-2 rounded text-xs bg-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g. Wait Classes"></div>
+                    </div>
+                    <div class="flex-1 flex flex-col min-h-0"><label class="block text-xs font-bold text-gray-500 mb-1">SQL Statement</label><textarea x-model="libItem.sql" class="flex-1 w-full border p-3 rounded text-xs font-mono bg-white resize-none focus:ring-2 focus:ring-blue-500 outline-none leading-relaxed"></textarea></div>
+                    <div class="flex justify-end gap-3 pt-2">
+                        <button @click="testEditorQuery()" class="bg-green-600 text-white px-4 py-2 rounded text-xs font-bold hover:bg-green-700 shadow-sm">Test Run</button>
+                        <button @click="saveLibItem()" class="bg-blue-600 text-white px-6 py-2 rounded text-xs font-bold hover:bg-blue-700 shadow-md">Save Query</button>
+                    </div>
+                </div>
+            </div>
+
+            <div x-show="currentTab === 'logs'" class="h-full bg-white rounded shadow-sm border border-gray-300 overflow-hidden flex flex-col">
+                <div class="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center shrink-0">
+                    <h3 class="font-bold text-gray-700 flex items-center gap-2">System Logs <span class="text-xs font-normal text-gray-500">(Last 200)</span></h3>
+                    <div class="flex gap-2">
+                        <div class="relative">
+                            <input type="text" x-model="logSearch" class="text-xs border rounded p-1 pl-2 pr-6 w-48 outline-none focus:ring-1 focus:ring-blue-500 transition-all" placeholder="Search logs...">
+                            <button x-show="logSearch" @click="logSearch = ''" class="absolute right-1 top-1 text-gray-400 hover:text-gray-600 font-bold">✕</button>
+                        </div>
+                        
+                        <select x-model="logFilter" class="text-xs border rounded p-1 outline-none focus:ring-1 focus:ring-blue-500">
+                            <option value="ALL">All Levels</option>
+                            <option value="ERROR">Errors Only</option>
+                            <option value="INFO">Info Only</option>
+                        </select>
+                        
+                        <button @click="fetchLogs()" class="text-xs bg-white border px-3 py-1 rounded hover:bg-gray-100">Refresh</button>
+                        <button @click="clearLogs()" class="text-xs bg-white border border-red-200 text-red-600 px-3 py-1 rounded hover:bg-red-50">Clear</button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-auto p-0">
+                    <table class="w-full text-left border-collapse">
+                        <thead class="bg-gray-50 sticky top-0 shadow-sm"><tr><th class="border-b border-gray-300 px-4 py-2 text-gray-600 font-semibold text-xs w-24">Time</th><th class="border-b border-gray-300 px-4 py-2 text-gray-600 font-semibold text-xs w-16">Level</th><th class="border-b border-gray-300 px-4 py-2 text-gray-600 font-semibold text-xs w-24">Source</th><th class="border-b border-gray-300 px-4 py-2 text-gray-600 font-semibold text-xs">Message</th></tr></thead>
+                        <tbody class="bg-white divide-y divide-gray-100">
+                            <template x-for="log in filteredLogs" :key="log.id">
+                                <tr class="hover:bg-gray-50 align-top group">
+                                    <td class="px-4 py-2 text-xs text-gray-500 font-mono" x-text="log.timestamp"></td>
+                                    <td class="px-4 py-2"><span class="text-[10px] px-2 py-0.5 rounded font-bold" :class="log.level === 'ERROR' ? 'bg-red-100 text-red-700' : 'bg-blue-50 text-blue-600'" x-text="log.level"></span></td>
+                                    <td class="px-4 py-2 text-xs text-gray-600 font-medium" x-text="log.source"></td>
+                                    <td class="px-4 py-2 text-xs text-gray-700"><div x-text="log.message"></div><div x-show="log.details" class="mt-1"><details><summary class="cursor-pointer text-blue-500 text-[10px] hover:underline select-none">View Details</summary><pre class="mt-1 bg-gray-50 p-2 rounded border border-gray-200 text-[10px] overflow-auto max-h-40 font-mono text-gray-600 whitespace-pre-wrap" x-text="log.details"></pre></details></div></td>
+                                </tr>
+                            </template>
+                            <tr x-show="filteredLogs.length === 0"><td colspan="4" class="p-8 text-center text-gray-400 italic">No logs found.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div x-show="currentTab === 'settings'" class="h-full bg-white rounded shadow-sm border border-gray-300 overflow-auto p-6">
+                <div class="max-w-2xl mx-auto">
+                    <h3 class="text-xl font-bold text-slate-800 mb-6">Configuration</h3>
+                    <div class="space-y-3 mb-8">
+                        <template x-for="(conn, index) in config.connections" :key="index">
+                            <div class="flex items-center justify-between p-3 border rounded-lg bg-gray-50 hover:bg-white hover:shadow-sm transition">
+                                <div class="flex items-center gap-3">
+                                    <div class="w-8 h-8 bg-slate-200 rounded-full flex items-center justify-center text-slate-600 font-bold text-xs" x-text="conn.name.substring(0,2).toUpperCase()"></div>
+                                    <div><div class="font-bold text-gray-800" x-text="conn.name"></div><div class="text-xs text-gray-500 font-mono" x-text="conn.user + '@' + conn.dsn"></div></div>
+                                </div>
+                                <div class="flex gap-2 items-center">
+                                    <span x-show="config.active_index === index" class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded font-medium">Active</span>
+                                    <button @click="editConnection(index)" class="text-slate-400 hover:text-blue-600 px-2 text-lg leading-none" title="Edit">✎</button>
+                                    <button @click="removeConnection(index)" class="text-slate-400 hover:text-red-600 px-2 text-lg leading-none" title="Delete">✕</button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                    <div class="bg-slate-50 border border-slate-200 rounded-lg p-5 transition-colors" :class="editingIndex !== null ? 'border-blue-300 bg-blue-50' : ''">
+                        <h4 class="font-bold text-slate-700 mb-4 text-xs uppercase tracking-wide flex justify-between items-center"><span x-text="editingIndex === null ? 'Add New Connection' : 'Edit Connection'"></span><span x-show="editingIndex !== null" class="text-[10px] bg-blue-200 text-blue-800 px-2 py-0.5 rounded">Editing Mode</span></h4>
+                        
+                        <div class="grid grid-cols-2 gap-4 mb-4">
+                            <input type="text" x-model="newConn.name" class="border p-2 rounded text-xs" placeholder="Friendly Name">
+                            <input type="text" x-model="newConn.dsn" class="border p-2 rounded text-xs" placeholder="Host:1521/FREE">
+                            <input type="text" x-model="newConn.user" class="border p-2 rounded text-xs" placeholder="Username">
+                            <input type="password" x-model="newConn.password" class="border p-2 rounded text-xs" :placeholder="editingIndex !== null ? 'Password (unchanged)' : 'Password'">
+                        </div>
+                        
+                        <div class="mb-2 flex items-center">
+                            <input type="checkbox" id="sysdba_cb" x-model="newConn.sysdba" class="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500">
+                            <label for="sysdba_cb" class="ml-2 text-xs font-bold text-slate-600">Connect as SYSDBA</label>
+                        </div>
+                        <div class="mb-4 flex items-center">
+                            <input type="checkbox" id="collect_cb" x-model="newConn.collect" class="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500">
+                            <label for="collect_cb" class="ml-2 text-xs font-bold text-slate-600">Collect history in the background</label>
+                            <span class="ml-2 text-[10px] text-slate-400">the viewed connection is always collected</span>
+                        </div>
+
+                        <div class="flex items-center mt-4">
+                            <div class="text-xs font-mono mr-4 flex-1 break-all" 
+                                 x-show="testResult"
+                                 :class="testResult && testResult.status === 'success' ? 'text-green-600' : 'text-red-600'">
+                                <span x-text="testResult ? (testResult.status === 'success' ? '✔ ' : '✘ ') + testResult.message : ''"></span>
+                            </div>
+
+                            <div class="flex gap-2 shrink-0 ml-auto">
+                                <button @click="testConnection()" class="bg-yellow-500 text-white px-4 py-2 rounded text-xs font-bold hover:bg-yellow-600 transition shadow-sm">Test</button>
+                                <button x-show="editingIndex !== null" @click="cancelEdit(); testResult=null" class="bg-white border border-gray-300 text-slate-600 px-4 py-2 rounded text-xs font-bold hover:bg-gray-100 transition">Cancel</button>
+                                <button @click="saveConnection(); testResult=null" class="bg-slate-800 text-white px-4 py-2 rounded text-xs font-bold hover:bg-slate-700 transition" x-text="editingIndex === null ? 'Save Connection' : 'Update Connection'"></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <div x-show="widgetManager.open" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center" x-cloak>
+        <div class="bg-white rounded-lg shadow-xl w-[600px] max-h-[80vh] flex flex-col overflow-hidden" @click.outside="widgetManager.open = false">
+            <div class="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center shrink-0">
+                <h3 class="font-bold text-gray-700">Manage Widget SQL</h3>
+                <button @click="widgetManager.open = false" class="text-gray-400 hover:text-gray-600 font-bold">✕</button>
+            </div>
+            
+            <div class="p-4 border-b border-gray-100 bg-white">
+                <div class="mb-2 text-xs text-gray-500">Assigning new SQL to widget: <span class="font-mono font-bold text-blue-600" x-text="widgetManager.targetKey"></span></div>
+                <input type="text" x-model="widgetManager.search" class="w-full border rounded p-2 text-xs outline-none focus:ring-2 focus:ring-blue-500" placeholder="Search library...">
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-0">
+                <table class="w-full text-left">
+                    <tbody class="divide-y divide-gray-100">
+                        <template x-for="item in library.filter(l => !widgetManager.search || l.desc.toLowerCase().includes(widgetManager.search.toLowerCase()) || l.id.includes(widgetManager.search))" :key="item.id">
+                            <tr class="hover:bg-blue-50 cursor-pointer group transition-colors">
+                                <td class="px-4 py-3 w-16 text-xs font-mono text-gray-500" x-text="item.id"></td>
+                                <td class="px-4 py-3">
+                                    <div class="text-xs font-bold text-gray-700" x-text="item.desc"></div>
+                                    <div class="text-[10px] text-gray-400 font-mono truncate max-w-sm" x-text="item.sql"></div>
+                                </td>
+                                <td class="px-4 py-3 text-right">
+                                    <button @click="selectWidgetQuery(item.id)" 
+                                            class="bg-blue-600 hover:bg-blue-700 text-white text-[10px] px-3 py-1.5 rounded font-bold shadow opacity-0 group-hover:opacity-100 transition-opacity">
+                                        Select
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script> 
+</body>
+</html>

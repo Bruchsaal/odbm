@@ -1,0 +1,7 @@
+# Pinned so the bundled licence set is reproducible for audit.
+# See THIRD-PARTY-NOTICES.md for each component's licence.
+fastapi==0.123.9
+uvicorn==0.38.0
+oracledb==3.4.1
+pydantic==2.12.5
+cryptography==46.0.3

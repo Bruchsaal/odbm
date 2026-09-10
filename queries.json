@@ -1,0 +1,550 @@
+{
+  "1": {
+    "id": "1",
+    "desc": "Distribution of Oracle Wait Classes in Percent",
+    "sql": "WITH aas AS (\n    SELECT n.wait_class                                AS wait_class,\n           m.time_waited / NULLIF(m.intsize_csec, 0)   AS aas\n    FROM   v$waitclassmetric m\n    JOIN   v$system_wait_class n ON n.wait_class_id = m.wait_class_id\n    WHERE  n.wait_class <> 'Idle'\n    UNION ALL\n    SELECT 'CPU', value / 100\n    FROM   v$sysmetric\n    WHERE  metric_name = 'CPU Usage Per Sec'\n      AND  group_id = 2\n)\nSELECT\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'CPU' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%CPU\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'User I/O' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%USER I/O\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'System I/O' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%SYSTEM I/O\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'Commit' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%COMMIT\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'Application' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%APPLICATION\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'Concurrency' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%CONCURRENCY\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'Configuration' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%CONFIGURATION\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'Administrative' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%ADMINISTRATIVE\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'Network' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%NETWORK\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'Scheduler' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%SCHEDULER\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class = 'Other' THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%OTHER\",\n       ROUND(100 * NVL(SUM(CASE WHEN wait_class IN ('Commit', 'User I/O', 'System I/O') THEN aas END), 0)\n             / NULLIF(SUM(aas), 0), 2) AS \"%IO SUMMARY\"\nFROM aas",
+    "mode": "QUERY",
+    "refreshOptimum": 60,
+    "historyName": "Wait Classes"
+  },
+  "2": {
+    "id": "2",
+    "desc": "Output Storage Latency per Oracle IO Wait Class",
+    "sql": "WITH main_query AS (\n\t\t\tselect wait_class,\n\t\t\tsum(m.wait_count)  cnt,\n\t\t\t10*sum(m.time_waited) ms,\n\t\t\tnvl(round(10*(sum(m.time_waited))/nullif(sum(m.wait_count),0),3) ,0) avg_ms\n\t\t\tfrom v$eventmetric m,\n\t\t\tv$event_name n\n\t\t\twhere  m.event_id=n.event_id\n\t\t\tand wait_class in ('System I/O', 'User I/O', 'Commit')\n\t\t\tand m.wait_count > 0\n\t\t\tgroup by wait_class\n\t\t\t)\n\t\t\tSELECT      (SELECT y.avg_ms FROM main_query y WHERE y.wait_class = 'User I/O' ) AS \"User I/O [ms]\"\n\t\t\t,(SELECT y.avg_ms FROM main_query y WHERE y.wait_class = 'System I/O' ) AS \"System I/O [ms]\"\n\t\t\t,(SELECT y.avg_ms FROM main_query y WHERE y.wait_class = 'Commit' ) AS \"Commit I/O [ms]\"\n\t\t\tfrom DUAL",
+    "mode": "QUERY",
+    "refreshOptimum": 60,
+    "historyName": "Latency",
+    "alert": {
+      "metric": "User I/O [ms]",
+      "warn": 20,
+      "crit": 50,
+      "direction": "above"
+    }
+  },
+  "3": {
+    "id": "3",
+    "desc": "Tablespace Usage",
+    "sql": "SELECT ts.tablespace_name,\n       ts.contents,\n       ROUND(df.alloc_bytes / 1048576, 2)                              AS \"allocated MB\",\n       ROUND(df.max_bytes   / 1048576, 2)                              AS \"max MB\",\n       ROUND(NVL(fs.free_bytes, 0) / 1048576, 2)                       AS \"free in MB\",\n       ROUND((df.alloc_bytes - NVL(fs.free_bytes, 0)) / 1048576, 2)    AS \"used in MB\",\n       ROUND(100 * (df.alloc_bytes - NVL(fs.free_bytes, 0))\n             / NULLIF(df.alloc_bytes, 0), 2)                           AS \"used % of alloc\",\n       ROUND(100 * (df.alloc_bytes - NVL(fs.free_bytes, 0))\n             / NULLIF(df.max_bytes, 0), 2)                             AS \"used %\"\nFROM   dba_tablespaces ts\nJOIN   (SELECT tablespace_name,\n               SUM(bytes) AS alloc_bytes,\n               SUM(CASE WHEN autoextensible = 'YES' AND maxbytes > bytes\n                        THEN maxbytes ELSE bytes END) AS max_bytes\n        FROM   dba_data_files\n        GROUP  BY tablespace_name\n        UNION ALL\n        SELECT tablespace_name,\n               SUM(bytes),\n               SUM(CASE WHEN autoextensible = 'YES' AND maxbytes > bytes\n                        THEN maxbytes ELSE bytes END)\n        FROM   dba_temp_files\n        GROUP  BY tablespace_name) df ON df.tablespace_name = ts.tablespace_name\nLEFT   JOIN (SELECT tablespace_name, SUM(bytes) AS free_bytes\n             FROM   dba_free_space\n             GROUP  BY tablespace_name\n             UNION ALL\n             SELECT tablespace_name, SUM(free_space)\n             FROM   dba_temp_free_space\n             GROUP  BY tablespace_name) fs ON fs.tablespace_name = ts.tablespace_name\nORDER  BY 8 DESC NULLS LAST",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "4": {
+    "id": "4",
+    "desc": "Show Parameter SGA",
+    "sql": "select * from v$parameter where name LIKE '%sga%'",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "5": {
+    "id": "5",
+    "desc": "Show Parameter PGA",
+    "sql": "select * from v$parameter where name LIKE '%pga%'",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "6": {
+    "id": "6",
+    "desc": "Show Parameter OPTI",
+    "sql": "select * from v$parameter where name LIKE '%opti%'",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "7": {
+    "id": "7",
+    "desc": "Show Parameter CURSOR",
+    "sql": "select * from v$parameter where name LIKE '%cursor%'",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "8": {
+    "id": "8",
+    "desc": "Current Used Space",
+    "sql": "SELECT ROUND(SUM(alloc)          / 1073741824, 2) AS \"DB Size in GB\",\n       ROUND(SUM(alloc - free)   / 1073741824, 2) AS \"Used space in GB\",\n       ROUND(SUM(free)           / 1073741824, 2) AS \"Free space in GB\",\n       ROUND(SUM(maxsize)        / 1073741824, 2) AS \"Max Size in GB\"\nFROM (\n    SELECT df.alloc, df.maxsize, NVL(fs.free, 0) AS free\n    FROM   (SELECT tablespace_name,\n                   SUM(bytes) AS alloc,\n                   SUM(CASE WHEN autoextensible = 'YES' AND maxbytes > bytes\n                            THEN maxbytes ELSE bytes END) AS maxsize\n            FROM   dba_data_files\n            GROUP  BY tablespace_name) df\n    LEFT   JOIN (SELECT tablespace_name, SUM(bytes) AS free\n                 FROM   dba_free_space\n                 GROUP  BY tablespace_name) fs\n           ON fs.tablespace_name = df.tablespace_name\n)",
+    "mode": "QUERY",
+    "refreshOptimum": 300,
+    "historyName": "Used Space"
+  },
+  "9": {
+    "id": "9",
+    "desc": "Used space by Owner",
+    "sql": "SELECT * FROM (\n    SELECT owner, ROUND(SUM(bytes) / 1048576, 2) AS \"Used MByte\"\n    FROM   dba_segments\n    GROUP  BY owner\n    ORDER  BY SUM(bytes) DESC\n)\nWHERE ROWNUM <= 200",
+    "mode": "QUERY",
+    "refreshOptimum": 600
+  },
+  "10": {
+    "id": "10",
+    "desc": "Top SQL (24 hours) by total execution time",
+    "sql": "SELECT * FROM (\n    SELECT parsing_schema_name, sql_id, plan_hash_value,\n           ROUND(elapsed_time / 1000000, 4)                             AS ELAPSED_TIME_SEC,\n           executions,\n           ROUND(elapsed_time / 1000000 / NULLIF(executions, 0), 4)     AS SINGLE_RUN_SEC,\n           SUBSTR(sql_text, 1, 400)                                     AS sql_text\n    FROM   v$sql\n    WHERE  executions > 0\n      AND  last_active_time > SYSDATE - 1\n      AND  parsing_schema_name NOT IN ('SYS','SYSTEM','DBSNMP','SYSMAN','OUTLN','XDB','WMSYS','CTXSYS','MDSYS',\n                                         'AUDSYS','OJVMSYS','APPQOSSYS','DVSYS','LBACSYS','ORDSYS','GSMADMIN_INTERNAL')\n    ORDER  BY elapsed_time DESC\n)\nWHERE ROWNUM <= 100",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "11": {
+    "id": "11",
+    "desc": "Top SQL (24 hours) by single execution time",
+    "sql": "SELECT * FROM (\n    SELECT parsing_schema_name, sql_id, plan_hash_value,\n           ROUND(elapsed_time / 1000000, 4)                             AS ELAPSED_TIME_SEC,\n           executions,\n           ROUND(elapsed_time / 1000000 / NULLIF(executions, 0), 4)     AS SINGLE_RUN_SEC,\n           SUBSTR(sql_text, 1, 400)                                     AS sql_text\n    FROM   v$sql\n    WHERE  executions > 0\n      AND  last_active_time > SYSDATE - 1\n      AND  parsing_schema_name NOT IN ('SYS','SYSTEM','DBSNMP','SYSMAN','OUTLN','XDB','WMSYS','CTXSYS','MDSYS',\n                                         'AUDSYS','OJVMSYS','APPQOSSYS','DVSYS','LBACSYS','ORDSYS','GSMADMIN_INTERNAL')\n    ORDER  BY elapsed_time / NULLIF(executions, 0) DESC\n)\nWHERE ROWNUM <= 100",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "12": {
+    "id": "12",
+    "desc": "Locked Objects",
+    "sql": "SELECT * FROM (\n    SELECT o.owner, o.object_name, o.object_type,\n           l.session_id AS sid, s.serial#, s.username, s.osuser, s.machine, s.program,\n           s.status, s.logon_time,\n           DECODE(l.locked_mode, 0,'None', 1,'Null', 2,'Row-S', 3,'Row-X',\n                                 4,'Share', 5,'S/Row-X', 6,'Exclusive',\n                  TO_CHAR(l.locked_mode)) AS lock_mode\n    FROM   v$locked_object l\n    JOIN   dba_objects o ON o.object_id = l.object_id\n    JOIN   v$session   s ON s.sid       = l.session_id\n    ORDER  BY o.owner, o.object_name\n)\nWHERE ROWNUM <= 200",
+    "mode": "QUERY",
+    "refreshOptimum": 10
+  },
+  "13": {
+    "id": "13",
+    "desc": "Fast Recovery Area Usage",
+    "sql": "SELECT name AS \"FRA Location\",\n       ROUND(space_limit / 1048576, 2)                                     AS \"FRA in MB\",\n       ROUND(space_used  / 1048576, 2)                                     AS \"Used in MB\",\n       ROUND(space_reclaimable / 1048576, 2)                               AS \"Reclaimable in MB\",\n       ROUND(100 * (space_used - space_reclaimable)\n             / NULLIF(space_limit, 0), 2)                                  AS \"% FRA used\"\nFROM   v$recovery_file_dest",
+    "mode": "QUERY",
+    "refreshOptimum": 300,
+    "historyName": "FRA",
+    "alert": {
+      "metric": "% FRA used",
+      "warn": 80,
+      "crit": 90,
+      "direction": "above"
+    }
+  },
+  "14": {
+    "id": "14",
+    "desc": "Show Plan Details",
+    "sql": "SELECT * FROM table (DBMS_XPLAN.DISPLAY_CURSOR ( sql_id=>:sql_id, format=> 'typical'))",
+    "mode": "QUERY",
+    "refreshOptimum": 0
+  },
+  "15": {
+    "id": "15",
+    "desc": "SQL Fulltext",
+    "sql": "select sql_text from v$sqltext where sql_id=:sql_id order by PIECE",
+    "mode": "QUERY",
+    "refreshOptimum": 0
+  },
+  "16": {
+    "id": "16",
+    "desc": "Tablespace Datafiles",
+    "sql": "SELECT a.file_name,\n\t\t\tsubstr(A.tablespace_name,1,14) tablespace_name,\n\t\t\ttrunc(decode(A.autoextensible,'YES',A.MAXSIZE-A.bytes+b.free,'NO',b.free)/1024/1024) free_mb,\n\t\t\ttrunc(a.bytes/1024/1024) allocated_mb,\n\t\t\ttrunc(A.MAXSIZE/1024/1024) capacity,\n\t\t\ta.autoextensible autoextensible\n\t\t\tFROM (\n\t\t\tSELECT file_id, file_name,\n\t\t\ttablespace_name,\n\t\t\tautoextensible,\n\t\t\tbytes,\n\t\t\tdecode(autoextensible,'YES',maxbytes,bytes) maxsize\n\t\t\tFROM   dba_data_files\n\t\t\tGROUP BY file_id, file_name,\n\t\t\ttablespace_name,\n\t\t\tautoextensible,\n\t\t\tbytes,\n\t\t\tdecode(autoextensible,'YES',maxbytes,bytes)\n\t\t\t) a,\n\t\t\t(SELECT file_id,\n\t\t\ttablespace_name,\n\t\t\tsum(bytes) free\n\t\t\tFROM   dba_free_space\n\t\t\tGROUP BY file_id,\n\t\t\ttablespace_name\n\t\t\t) b\n\t\t\tWHERE a.file_id=b.file_id(+)\n\t\t\tAND A.tablespace_name=b.tablespace_name(+)\n\t\t\tORDER BY A.file_name ASC",
+    "mode": "QUERY",
+    "refreshOptimum": 600
+  },
+  "17": {
+    "id": "17",
+    "desc": "RMAN Database Backups (Full + Incremental)",
+    "sql": "SELECT * FROM (\n    SELECT input_type, status,\n           TO_CHAR(start_time, 'YYYY-MM-DD HH24:MI:SS') AS START_TIME,\n           TO_CHAR(end_time,   'YYYY-MM-DD HH24:MI:SS') AS END_TIME,\n           time_taken_display, input_bytes_display, output_bytes_display, output_device_type\n    FROM   v$rman_backup_job_details\n    WHERE  input_type IN ('DB FULL', 'DB INCR')\n    ORDER  BY start_time DESC\n)\nWHERE ROWNUM <= 50",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "18": {
+    "id": "18",
+    "desc": "RMAN Backup Errors",
+    "sql": "SELECT * FROM (\n    SELECT session_key, input_type, optimized, status,\n           TO_CHAR(start_time, 'YYYY-MM-DD HH24:MI:SS') AS START_TIME,\n           TO_CHAR(end_time,   'YYYY-MM-DD HH24:MI:SS') AS END_TIME,\n           time_taken_display, input_bytes_display, output_bytes_display, output_device_type\n    FROM   v$rman_backup_job_details\n    WHERE  status LIKE '%FAILED%' OR status LIKE '%WARNING%' OR status LIKE '%ERROR%'\n    ORDER  BY end_time DESC\n)\nWHERE ROWNUM <= 50",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "19": {
+    "id": "19",
+    "desc": "RMAN Backups",
+    "sql": "SELECT * FROM (\n    SELECT session_key, input_type, optimized, status,\n           TO_CHAR(start_time, 'YYYY-MM-DD HH24:MI:SS') AS START_TIME,\n           TO_CHAR(end_time,   'YYYY-MM-DD HH24:MI:SS') AS END_TIME,\n           time_taken_display, input_bytes_display, output_bytes_display, output_device_type\n    FROM   v$rman_backup_job_details\n    ORDER  BY end_time DESC\n)\nWHERE ROWNUM <= 100",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "20": {
+    "id": "20",
+    "desc": "Active and Blocked Sessions",
+    "sql": "SELECT * FROM (\n    SELECT s.sid, s.serial#, s.username, s.osuser, s.machine, s.program, s.module,\n           s.service_name, s.status, s.state, s.event, s.wait_class,\n           s.seconds_in_wait, s.last_call_et, s.sql_id, s.prev_sql_id,\n           s.blocking_session, s.blocking_instance, s.blocking_session_status,\n           s.row_wait_obj#, s.logon_time\n    FROM   v$session s\n    WHERE  s.type = 'USER'\n      AND  s.username IS NOT NULL\n      AND  (s.status = 'ACTIVE' OR s.blocking_session IS NOT NULL)\n    ORDER  BY DECODE(s.status, 'ACTIVE', 0, 1), s.last_call_et DESC\n)\nWHERE ROWNUM <= 200",
+    "mode": "QUERY",
+    "refreshOptimum": 5
+  },
+  "21": {
+    "id": "21",
+    "desc": "Datapump Jobs",
+    "sql": "select * from dba_datapump_jobs",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "22": {
+    "id": "22",
+    "desc": "Datapump Sessions",
+    "sql": "select * from SYS.dba_datapump_sessions",
+    "mode": "QUERY",
+    "refreshOptimum": 60
+  },
+  "24": {
+    "id": "24",
+    "desc": "DBA Resumable",
+    "sql": "select * from SYS.dba_resumable",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "23": {
+    "id": "23",
+    "desc": "Session Longops < 100%",
+    "sql": "SELECT * FROM (\n    SELECT username, sid, serial#, opname, target,\n           ROUND(sofar * 100 / NULLIF(totalwork, 0), 0) AS \"PCT_DONE\",\n           sofar, totalwork, units, time_remaining,\n           TO_CHAR(start_time, 'YYYY-MM-DD HH24:MI:SS') AS start_time\n    FROM   v$session_longops\n    WHERE  totalwork > 0\n      AND  sofar < totalwork\n    ORDER  BY start_time DESC\n)\nWHERE ROWNUM <= 200",
+    "mode": "QUERY",
+    "refreshOptimum": 15
+  },
+  "25": {
+    "id": "25",
+    "desc": "Free Tablespace",
+    "sql": "select tablespace_name,round(sum(bytes)/1024/1024,2) as \"Free space in MB\" from dba_free_space group by tablespace_name",
+    "mode": "QUERY",
+    "refreshOptimum": 600
+  },
+  "26": {
+    "id": "26",
+    "desc": "All Database Users",
+    "sql": "SELECT * FROM (\n    SELECT username, user_id, account_status, expiry_date, default_tablespace,\n           profile, password_versions, authentication_type, created\n    FROM   dba_users\n    ORDER  BY username\n)\nWHERE ROWNUM <= 500",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "27": {
+    "id": "27",
+    "desc": "Average Act Session",
+    "sql": "SELECT ROUND(SUM(aas), 2) AS AVG_ACT_SESS\nFROM (\n    SELECT m.time_waited / NULLIF(m.intsize_csec, 0) AS aas\n    FROM   v$waitclassmetric m\n    JOIN   v$system_wait_class n ON n.wait_class_id = m.wait_class_id\n    WHERE  n.wait_class <> 'Idle'\n    UNION ALL\n    SELECT value / 100\n    FROM   v$sysmetric\n    WHERE  metric_name = 'CPU Usage Per Sec'\n      AND  group_id = 2\n)",
+    "mode": "QUERY",
+    "refreshOptimum": 60,
+    "historyName": "Active Sessions"
+  },
+  "28": {
+    "id": "28",
+    "desc": "Database Profiles",
+    "sql": "select * from dba_profiles order by profile",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "29": {
+    "id": "29",
+    "desc": "Segment Advisor",
+    "sql": "SELECT segment_owner, segment_name, segment_type,\n\t\t\tROUND(reclaimable_space/1024/1024,2) AS Reclaim_Space_MByte,\n\t\t\tROUND(allocated_space/1024/1024,2) AS Alloc_Space_MByte,\n\t\t\tROUND(used_space/1024/1024,2) Used_Space_MByte\n\t\t\tFROM TABLE(dbms_space.asa_recommendations()) ORDER BY reclaimable_space DESC",
+    "mode": "QUERY",
+    "refreshOptimum": 3600
+  },
+  "30": {
+    "id": "30",
+    "desc": "Alert Log Entries (2 days, important and above)",
+    "sql": "SELECT * FROM (\n    SELECT originating_timestamp, message_level, component_id,\n           SUBSTR(message_text, 1, 1000) AS message_text\n    FROM   v$diag_alert_ext\n    WHERE  originating_timestamp > SYSTIMESTAMP - INTERVAL '2' DAY\n      AND  message_level <= 8\n    ORDER  BY originating_timestamp DESC\n)\nWHERE ROWNUM <= 200",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "73": {
+    "id": "73",
+    "desc": "Setting password for a user",
+    "sql": "ALTER USER <username> IDENTIFIED BY <password>",
+    "mode": "COMMAND",
+    "refreshOptimum": 0
+  },
+  "74": {
+    "id": "74",
+    "desc": "Setting profile for a user",
+    "sql": "ALTER USER <username> PROFILE <profile_name>",
+    "mode": "COMMAND",
+    "refreshOptimum": 0
+  },
+  "75": {
+    "id": "75",
+    "desc": "Unlocking Account of a user",
+    "sql": "ALTER USER <username> ACCOUNT UNLOCK",
+    "mode": "COMMAND",
+    "refreshOptimum": 0
+  },
+  "76": {
+    "id": "76",
+    "desc": "Alter Datafile and set autoextend on",
+    "sql": "ALTER DATABASE DATAFILE '<full_path_to_datafile>.dbf' AUTOEXTEND ON NEXT 100M MAXSIZE 20G",
+    "mode": "COMMAND",
+    "refreshOptimum": 0
+  },
+  "77": {
+    "id": "77",
+    "desc": "Alter Tablespace and add a new Datafile",
+    "sql": "ALTER TABLESPACE <tablespace_name> ADD DATAFILE '<full_path_to_new_datafile>.dbf' SIZE 1G AUTOEXTEND ON NEXT 100M MAXSIZE 20G",
+    "mode": "COMMAND",
+    "refreshOptimum": 0
+  },
+  "78": {
+    "id": "78",
+    "desc": "Select * from dba_data_files",
+    "sql": "select * from dba_data_files",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "79": {
+    "id": "79",
+    "desc": "Select * from v$datafile",
+    "sql": "select * from v$datafile",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "80": {
+    "id": "80",
+    "desc": "Selected Values from dba_data_files with formatting",
+    "sql": "SELECT file_name, tablespace_name, status, autoextensible,\n       ROUND(increment_by * 8 / 1024, 2)                              AS \"Next MB added\",\n       ROUND(bytes / 1048576, 2)                                      AS \"size in MB\",\n       ROUND(user_bytes / 1048576, 2)                                 AS \"used in MB\",\n       ROUND(100 * user_bytes / NULLIF(bytes, 0), 2)                  AS \"used in %\",\n       ROUND(maxbytes / 1048576, 2)                                   AS \"max size in MB\",\n       ROUND(100 * bytes / NULLIF(DECODE(maxbytes, 0, bytes, maxbytes), 0), 2) AS \"alloc in %\"\nFROM   dba_data_files\nORDER  BY file_name",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "81": {
+    "id": "81",
+    "desc": "Show DB ArchiveLog Checkpoint Change",
+    "sql": "Select NAME, CREATED, LOG_MODE, CHECKPOINT_CHANGE#, ARCHIVE_CHANGE# from V$DATABASE",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "83": {
+    "id": "83",
+    "desc": "Archive Log Mode and Status",
+    "sql": "SELECT d.name AS db_name, d.log_mode, d.open_mode, d.database_role,\n       i.instance_name, i.host_name, i.version, i.startup_time,\n       (SELECT COUNT(*) FROM v$archived_log\n         WHERE completion_time > SYSDATE - 1) AS \"Archived Last 24h\"\nFROM   v$database d, v$instance i",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "84": {
+    "id": "84",
+    "desc": "Show DBA Directories",
+    "sql": "select * from dba_directories",
+    "mode": "QUERY",
+    "refreshOptimum": 1800
+  },
+  "85": {
+    "id": "85",
+    "desc": "ALTER DBA Directory",
+    "sql": "CREATE OR REPLACE DIRECTORY <directory_name> AS '<full_path>'",
+    "mode": "COMMAND",
+    "refreshOptimum": 0
+  },
+  "86": {
+    "id": "86",
+    "desc": "Show Database Name",
+    "sql": "select name from v$database",
+    "mode": "QUERY",
+    "refreshOptimum": 3600
+  },
+  "87": {
+    "id": "87",
+    "desc": "Show Invalid Objects",
+    "sql": "SELECT * FROM (\n    SELECT owner, object_type, object_name, status, last_ddl_time\n    FROM   dba_objects\n    WHERE  status = 'INVALID'\n    ORDER  BY owner, object_type, object_name\n)\nWHERE ROWNUM <= 500",
+    "mode": "QUERY",
+    "refreshOptimum": 600
+  },
+  "88": {
+    "id": "88",
+    "desc": "ALTER SYSTEM Set Job Queue to 100",
+    "sql": "ALTER system SET JOB_QUEUE_PROCESSES=100 scope=both",
+    "mode": "COMMAND",
+    "refreshOptimum": 0
+  },
+  "94": {
+    "id": "94",
+    "desc": "Database Object Errors (dba_errors)",
+    "sql": "SELECT * FROM (\n    SELECT owner, name, type, sequence, line, position, SUBSTR(text, 1, 400) AS text\n    FROM   dba_errors\n    ORDER  BY owner, name, sequence\n)\nWHERE ROWNUM <= 200",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "96": {
+    "id": "96",
+    "desc": "Machine CPU Info",
+    "sql": "SELECT STAT_NAME,\n\t\t\tto_char(VALUE) AS VALUE,\n\t\t\tCOMMENTS\n\t\t\tFROM v$osstat\n\t\t\tWHERE stat_name IN (\n\t\t\t'NUM_CPUS'\n\t\t\t,'NUM_CPU_CORES'\n\t\t\t,'NUM_CPU_SOCKETS'\n\t\t\t)\n\n\t\t\tUNION\n\n\t\t\tSELECT STAT_NAME\n\t\t\t,round(VALUE / 1024 / 1024 / 1024,0) || ' GB' as RAM\n\t\t\t,COMMENTS\n\t\t\tFROM v$osstat\n\t\t\tWHERE stat_name IN ('PHYSICAL_MEMORY_BYTES')",
+    "mode": "QUERY",
+    "refreshOptimum": 3600
+  },
+  "ASM_01": {
+    "id": "ASM_01",
+    "desc": "ASM Disk Group Usage % (Connected Groups Only)",
+    "sql": "SELECT name, state, total_mb, free_mb,\n       ROUND(100 * (total_mb - free_mb) / NULLIF(total_mb, 0), 2) AS \"Usage %\"\nFROM   v$asm_diskgroup\nWHERE  state = 'CONNECTED'\nORDER  BY 5 DESC NULLS LAST",
+    "mode": "QUERY",
+    "refreshOptimum": 300,
+    "alert": {
+      "metric": "Usage %",
+      "label": "NAME",
+      "warn": 80,
+      "crit": 90,
+      "direction": "above"
+    }
+  },
+  "ASM_02": {
+    "id": "ASM_02",
+    "desc": "ASM Disk Group State Enumeration",
+    "sql": "SELECT NAME, STATE FROM v$asm_diskgroup",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "AVAIL_01": {
+    "id": "AVAIL_01",
+    "desc": "Oracle Instance Status and Database Status",
+    "sql": "SELECT instance_name, status, database_status FROM v$instance",
+    "mode": "QUERY",
+    "refreshOptimum": 30
+  },
+  "AVAIL_02": {
+    "id": "AVAIL_02",
+    "desc": "Count of Invalid Database Objects",
+    "sql": "SELECT COUNT(object_name) AS invalid_count FROM dba_objects WHERE status = 'INVALID'",
+    "mode": "QUERY",
+    "refreshOptimum": 600,
+    "historyName": "Invalid Objects",
+    "alert": {
+      "metric": "INVALID_COUNT",
+      "warn": 1,
+      "crit": 100,
+      "direction": "above"
+    }
+  },
+  "SEC_01": {
+    "id": "SEC_01",
+    "desc": "List of Locked User Accounts",
+    "sql": "SELECT * FROM (\n    SELECT username, account_status, lock_date, expiry_date, profile\n    FROM   dba_users\n    WHERE  account_status LIKE '%LOCKED%'\n    ORDER  BY username\n)\nWHERE ROWNUM <= 500",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "SPACE_01": {
+    "id": "SPACE_01",
+    "desc": "Permanent Tablespace Usage Percentage",
+    "sql": "SELECT df.tablespace_name,\n       ROUND(100 * (df.alloc_bytes - NVL(fs.free_bytes, 0))\n             / NULLIF(df.max_bytes, 0), 2) AS \"Usage %\"\nFROM   (SELECT tablespace_name,\n               SUM(bytes) AS alloc_bytes,\n               SUM(CASE WHEN autoextensible = 'YES' AND maxbytes > bytes\n                        THEN maxbytes ELSE bytes END) AS max_bytes\n        FROM   dba_data_files\n        GROUP  BY tablespace_name) df\nLEFT   JOIN (SELECT tablespace_name, SUM(bytes) AS free_bytes\n             FROM   dba_free_space\n             GROUP  BY tablespace_name) fs ON fs.tablespace_name = df.tablespace_name\nORDER  BY 2 DESC NULLS LAST",
+    "mode": "QUERY",
+    "refreshOptimum": 600,
+    "alert": {
+      "metric": "Usage %",
+      "label": "TABLESPACE_NAME",
+      "warn": 85,
+      "crit": 95,
+      "direction": "above"
+    }
+  },
+  "SPACE_02": {
+    "id": "SPACE_02",
+    "desc": "Temporary Tablespace Usage",
+    "sql": "SELECT tablespace_name,\n       ROUND(tablespace_size  / 1048576, 2)                             AS \"Size MB\",\n       ROUND(allocated_space  / 1048576, 2)                             AS \"Allocated MB\",\n       ROUND(free_space       / 1048576, 2)                             AS \"Free MB\",\n       ROUND(100 * (tablespace_size - free_space)\n             / NULLIF(tablespace_size, 0), 2)                           AS \"Used %\"\nFROM   dba_temp_free_space\nORDER  BY 5 DESC NULLS LAST",
+    "mode": "QUERY",
+    "refreshOptimum": 60,
+    "alert": {
+      "metric": "Used %",
+      "label": "TABLESPACE_NAME",
+      "warn": 85,
+      "crit": 95,
+      "direction": "above"
+    }
+  },
+  "PERF_01": {
+    "id": "PERF_01",
+    "desc": "Active Session Count by Status",
+    "sql": "SELECT COUNT(CASE WHEN status = 'ACTIVE'   THEN 1 END) AS \"Active\",\n       COUNT(CASE WHEN status = 'INACTIVE' THEN 1 END) AS \"Inactive\",\n       COUNT(CASE WHEN status = 'KILLED'   THEN 1 END) AS \"Killed\",\n       COUNT(CASE WHEN status = 'SNIPED'   THEN 1 END) AS \"Sniped\",\n       COUNT(*)                                        AS \"Total\"\nFROM   v$session\nWHERE  type = 'USER'",
+    "mode": "QUERY",
+    "refreshOptimum": 10,
+    "historyName": "Active Session Count"
+  },
+  "PERF_02": {
+    "id": "PERF_02",
+    "desc": "Blocking Sessions (Locks)",
+    "sql": "SELECT * FROM (\n    SELECT s.blocking_session, s.sid, s.serial#, s.username, s.event, s.wait_class,\n           s.seconds_in_wait, s.sql_id, s.machine, s.program\n    FROM   v$session s\n    WHERE  s.blocking_session IS NOT NULL\n    ORDER  BY s.seconds_in_wait DESC\n)\nWHERE ROWNUM <= 200",
+    "mode": "QUERY",
+    "refreshOptimum": 5
+  },
+  "PERF_03": {
+    "id": "PERF_03",
+    "desc": "Long Running Operations (>6 seconds)",
+    "sql": "SELECT * FROM (\n    SELECT sid, serial#, opname, target, sofar, totalwork, units,\n           ROUND(sofar * 100 / NULLIF(totalwork, 0), 0) AS \"PCT_DONE\",\n           start_time, time_remaining\n    FROM   v$session_longops\n    WHERE  time_remaining > 0\n    ORDER  BY time_remaining DESC\n)\nWHERE ROWNUM <= 200",
+    "mode": "QUERY",
+    "refreshOptimum": 15
+  },
+  "PERF_04": {
+    "id": "PERF_04",
+    "desc": "Buffer Cache Hit Ratio",
+    "sql": "SELECT ROUND(value, 2) AS \"Cache Hit Ratio\"\nFROM   v$sysmetric\nWHERE  metric_name = 'Buffer Cache Hit Ratio'\n  AND  group_id = 2",
+    "mode": "QUERY",
+    "refreshOptimum": 60,
+    "historyName": "Cache Hit Ratio"
+  },
+  "HIST_01": {
+    "id": "HIST_01",
+    "desc": "IO Throughput (MB/s)",
+    "sql": "SELECT ROUND(SUM(CASE WHEN metric_name = 'Physical Read Total Bytes Per Sec' THEN value ELSE 0 END) / 1024 / 1024, 2) AS \"Read MB/s\", ROUND(SUM(CASE WHEN metric_name = 'Physical Write Total Bytes Per Sec' THEN value ELSE 0 END) / 1024 / 1024, 2) AS \"Write MB/s\" FROM v$sysmetric WHERE group_id = 2",
+    "mode": "QUERY",
+    "refreshOptimum": 60,
+    "historyName": "IO Throughput"
+  },
+  "HIST_02": {
+    "id": "HIST_02",
+    "desc": "Workload Rate (TPS & Hard Parses)",
+    "sql": "SELECT SUM(CASE WHEN metric_name = 'User Commits Per Sec' THEN value ELSE 0 END) AS \"User Commits/sec\", SUM(CASE WHEN metric_name = 'Hard Parse Count Per Sec' THEN value ELSE 0 END) AS \"Hard Parses/sec\" FROM v$sysmetric WHERE group_id = 2",
+    "mode": "QUERY",
+    "refreshOptimum": 60,
+    "historyName": "Workload Rate"
+  },
+  "98": {
+    "id": "98",
+    "desc": "Top SQL (all in cache) by single execution time",
+    "sql": "SELECT * FROM (\n    SELECT parsing_schema_name, sql_id, plan_hash_value,\n           ROUND(elapsed_time / 1000000, 4)                             AS ELAPSED_TIME_SEC,\n           executions,\n           ROUND(elapsed_time / 1000000 / NULLIF(executions, 0), 4)     AS SINGLE_RUN_SEC,\n           SUBSTR(sql_text, 1, 400)                                     AS sql_text\n    FROM   v$sql\n    WHERE  executions > 0\n      AND  parsing_schema_name NOT IN ('SYS','SYSTEM','DBSNMP','SYSMAN','OUTLN','XDB','WMSYS','CTXSYS','MDSYS',\n                                         'AUDSYS','OJVMSYS','APPQOSSYS','DVSYS','LBACSYS','ORDSYS','GSMADMIN_INTERNAL')\n    ORDER  BY elapsed_time / NULLIF(executions, 0) DESC\n)\nWHERE ROWNUM <= 100",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "SPACE_03": {
+    "id": "SPACE_03",
+    "desc": "Worst Tablespace Usage % (single value for trending)",
+    "sql": "SELECT ROUND(MAX(100 * (df.alloc_bytes - NVL(fs.free_bytes, 0))\n                 / NULLIF(df.max_bytes, 0)), 2) AS \"Max Usage %\"\nFROM   (SELECT tablespace_name,\n               SUM(bytes) AS alloc_bytes,\n               SUM(CASE WHEN autoextensible = 'YES' AND maxbytes > bytes\n                        THEN maxbytes ELSE bytes END) AS max_bytes\n        FROM   dba_data_files\n        GROUP  BY tablespace_name) df\nLEFT   JOIN (SELECT tablespace_name, SUM(bytes) AS free_bytes\n             FROM   dba_free_space\n             GROUP  BY tablespace_name) fs ON fs.tablespace_name = df.tablespace_name",
+    "mode": "QUERY",
+    "refreshOptimum": 600,
+    "historyName": "Tablespace Usage %"
+  },
+  "ASM_03": {
+    "id": "ASM_03",
+    "desc": "Worst ASM Disk Group Usage % (single value for trending)",
+    "sql": "SELECT ROUND(MAX(100 * (total_mb - free_mb) / NULLIF(total_mb, 0)), 2) AS \"Max Usage %\"\nFROM   v$asm_diskgroup\nWHERE  state = 'CONNECTED'",
+    "mode": "QUERY",
+    "refreshOptimum": 300,
+    "historyName": "ASM Usage"
+  },
+  "RES_01": {
+    "id": "RES_01",
+    "desc": "Resource Limits (processes, sessions nearing their cap)",
+    "sql": "SELECT resource_name, current_utilization, max_utilization,\n       initial_allocation, limit_value,\n       ROUND(100 * current_utilization\n             / NULLIF(CASE WHEN TRIM(initial_allocation) = 'UNLIMITED' THEN NULL\n                           ELSE TO_NUMBER(TRIM(initial_allocation)) END, 0), 2) AS \"Pct Used\"\nFROM   v$resource_limit\nWHERE  resource_name IN ('processes', 'sessions', 'transactions',\n                         'enqueue_locks', 'dml_locks', 'parallel_max_servers')\nORDER  BY 6 DESC NULLS LAST",
+    "mode": "QUERY",
+    "refreshOptimum": 60,
+    "alert": {
+      "metric": "Pct Used",
+      "label": "RESOURCE_NAME",
+      "warn": 80,
+      "crit": 90,
+      "direction": "above"
+    }
+  },
+  "DG_01": {
+    "id": "DG_01",
+    "desc": "Data Guard Lag and Status",
+    "sql": "SELECT name, value, unit, TO_CHAR(time_computed) AS time_computed\nFROM   v$dataguard_stats",
+    "mode": "QUERY",
+    "refreshOptimum": 60
+  },
+  "DG_02": {
+    "id": "DG_02",
+    "desc": "Archive Destination Status and Errors",
+    "sql": "SELECT dest_id, dest_name, status, target, schedule, destination, error\nFROM   v$archive_dest_status\nWHERE  status NOT IN ('INACTIVE', 'DEFERRED')\nORDER  BY dest_id",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "UNDO_01": {
+    "id": "UNDO_01",
+    "desc": "Undo Usage and Retention (last 24 snapshots)",
+    "sql": "SELECT * FROM (\n    SELECT TO_CHAR(begin_time, 'YYYY-MM-DD HH24:MI') AS begin_time,\n           undoblks, txncount, maxquerylen, maxconcurrency,\n           nospaceerrcnt, unxpstealcnt, tuned_undoretention\n    FROM   v$undostat\n    ORDER  BY begin_time DESC\n)\nWHERE ROWNUM <= 24",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "REDO_01": {
+    "id": "REDO_01",
+    "desc": "Redo Log Switches per Hour (last 2 days)",
+    "sql": "SELECT TO_CHAR(first_time, 'YYYY-MM-DD HH24') AS log_hour, COUNT(*) AS switches\nFROM   v$log_history\nWHERE  first_time > SYSDATE - 2\nGROUP  BY TO_CHAR(first_time, 'YYYY-MM-DD HH24')\nORDER  BY 1 DESC",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "JOB_01": {
+    "id": "JOB_01",
+    "desc": "Failed Scheduler Jobs (last 7 days)",
+    "sql": "SELECT * FROM (\n    SELECT owner, job_name, status,\n           TO_CHAR(actual_start_date, 'YYYY-MM-DD HH24:MI:SS') AS started,\n           run_duration, error#, SUBSTR(additional_info, 1, 300) AS additional_info\n    FROM   dba_scheduler_job_run_details\n    WHERE  status <> 'SUCCEEDED'\n      AND  actual_start_date > SYSDATE - 7\n    ORDER  BY actual_start_date DESC\n)\nWHERE ROWNUM <= 100",
+    "mode": "QUERY",
+    "refreshOptimum": 300
+  },
+  "BLOCK_01": {
+    "id": "BLOCK_01",
+    "desc": "Blocking Session Tree",
+    "sql": "SELECT LPAD(' ', 2 * (LEVEL - 1)) || s.sid AS \"Blocking Tree\",\n       LEVEL AS depth, s.sid, s.serial#, s.username, s.status,\n       s.event, s.wait_class, s.seconds_in_wait, s.sql_id, s.machine, s.program\nFROM   v$session s\nSTART  WITH s.blocking_session IS NULL\n       AND  s.sid IN (SELECT blocking_session FROM v$session\n                       WHERE blocking_session IS NOT NULL)\nCONNECT BY NOCYCLE PRIOR s.sid = s.blocking_session\nORDER  SIBLINGS BY s.sid",
+    "mode": "QUERY",
+    "refreshOptimum": 10
+  }
+}
