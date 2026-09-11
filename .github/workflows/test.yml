@@ -13,8 +13,15 @@ permissions:
 
 jobs:
   test:
-    name: pytest
-    runs-on: ubuntu-latest
+    # All three, because the release workflow builds all three. A Windows-only
+    # failure previously surfaced at tag time and blocked the release instead
+    # of failing on the push that caused it.
+    name: pytest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +41,7 @@ jobs:
       # The frontend escaping tests skip without node; ubuntu-latest ships it,
       # so fail loudly if they were silently skipped.
       - name: Confirm frontend tests ran
+        if: runner.os == 'Linux'
         run: |
           node --version
           python -m pytest tests/test_frontend.py -q --no-header -rs 2>&1 | tee /tmp/fe.txt

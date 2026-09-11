@@ -4,6 +4,8 @@
 
 import pytest
 
+from conftest import posix_only
+
 import configBroker
 import main
 import storage
@@ -48,6 +50,7 @@ def test_boot_never_overwrites_user_data(seeded):
     assert storage.read_json("queries.json")["1"]["refreshOptimum"] == 60
 
 
+@posix_only
 def test_boot_writes_a_private_credentials_file(data_dir, no_bundled_library):
     import os
     main.check_and_deploy_data()
@@ -310,6 +313,7 @@ def test_switching_active_connection_switches_history_store(client, fake_db):
     assert client.get("/api/history/options").json() == {}
 
 
+@posix_only
 def test_deployed_data_files_are_not_owner_only(data_dir):
     """
     shutil.copy2 preserved PyInstaller's restrictive _MEIPASS mode, so a first
@@ -335,6 +339,7 @@ def test_deployed_data_files_are_not_owner_only(data_dir):
         storage.set_resource_dir(None)
 
 
+@posix_only
 def test_credentials_file_stays_owner_only(data_dir, no_bundled_library):
     """connections.json must remain 0600 even as the others widen."""
     import os

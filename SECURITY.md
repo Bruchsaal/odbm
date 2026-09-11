@@ -37,6 +37,17 @@ deliberately does not do matters more than any individual bug:
 - Credentials are never bundled into released binaries, and `connections.json`
   is not tracked in git.
 
+### Windows
+
+The `0600` modes above are POSIX. On Windows `os.chmod` only toggles the
+read-only attribute, so `connections.json` and `.odbm_key` inherit whatever
+NTFS ACL their parent directory carries — they are **not** restricted to your
+account by ODBM. If other accounts can read the directory you run ODBM from,
+they can read your encryption key and the encrypted credentials beside it.
+
+Run ODBM from a directory only your account can read, for example under
+`%LOCALAPPDATA%`, rather than a shared or world-readable location.
+
 ## Scope
 
 In scope: credential disclosure, escaping and injection issues, anything

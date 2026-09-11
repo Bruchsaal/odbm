@@ -4,6 +4,8 @@
 
 import os
 
+from conftest import posix_only
+
 import configBroker
 import cryptoBroker
 import storage
@@ -27,6 +29,7 @@ def test_password_is_encrypted_on_disk(data_dir):
     assert cryptoBroker.is_encrypted(stored)
 
 
+@posix_only
 def test_config_file_is_owner_only(data_dir):
     _save([{"id": "a", "user": "u", "password": "p", "dsn": "d"}])
     mode = os.stat(data_dir / "connections.json").st_mode & 0o777

@@ -4,6 +4,8 @@
 
 import os
 
+from conftest import posix_only
+
 import cryptoBroker
 import storage
 
@@ -30,6 +32,7 @@ def test_legacy_plaintext_passes_through(data_dir):
     assert cryptoBroker.decrypt("oldPlaintext") == "oldPlaintext"
 
 
+@posix_only
 def test_key_file_is_owner_only(data_dir):
     cryptoBroker.encrypt("pw")
     key_path = data_dir / cryptoBroker.KEY_FILE

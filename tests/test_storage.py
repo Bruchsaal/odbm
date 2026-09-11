@@ -7,6 +7,8 @@ import os
 
 import pytest
 
+from conftest import posix_only
+
 import storage
 
 
@@ -24,6 +26,7 @@ def test_write_then_read_round_trip(data_dir):
     assert storage.read_json("x.json") == {"k": [1, 2, 3]}
 
 
+@posix_only
 def test_private_write_is_owner_only(data_dir):
     storage.write_json("secret.json", {"p": "x"}, private=True)
     mode = os.stat(data_dir / "secret.json").st_mode & 0o777
@@ -53,6 +56,7 @@ def test_data_dir_is_isolated(data_dir):
     assert (data_dir / "here.json").exists()
 
 
+@posix_only
 def test_non_private_files_are_not_owner_only(data_dir):
     """
     mkstemp creates 0600, so writing through the atomic path silently made
@@ -66,6 +70,7 @@ def test_non_private_files_are_not_owner_only(data_dir):
     assert mode != 0o600 or umask == 0o177
 
 
+@posix_only
 def test_private_and_public_writes_differ(data_dir):
     storage.write_json("public.json", {}, private=False)
     storage.write_json("secret.json", {}, private=True)

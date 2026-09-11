@@ -28,6 +28,13 @@ import dbBroker  # noqa: E402
 import historyBroker  # noqa: E402
 from logBroker import logger  # noqa: E402
 
+# Windows has no POSIX mode bits: os.chmod only toggles the read-only flag and
+# st_mode reports a synthetic value, so 0600 assertions cannot hold there.
+posix_only = pytest.mark.skipif(
+    os.name != "posix",
+    reason="POSIX file modes; Windows protects files through NTFS ACLs instead",
+)
+
 SEED_QUERIES = {
     "1": {
         "id": "1", "desc": "Wait Classes", "sql": "select 1 from dual",
