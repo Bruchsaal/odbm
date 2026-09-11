@@ -11,6 +11,7 @@ monitored database and script execution in the dashboard.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -103,16 +104,22 @@ def test_footer_links_to_licence_and_source():
         assert href in footer, f"footer is missing {href}"
 
 
-def test_footer_source_url_matches_the_git_remote():
-    """The URL was previously guessed from an archived marketing page."""
-    import subprocess
-    remote = subprocess.run(["git", "remote", "get-url", "origin"],
-                            capture_output=True, text=True,
-                            cwd=os.path.dirname(INDEX_HTML)).stdout.strip()
-    if not remote:
-        pytest.skip("no git remote configured")
-    slug = remote.rstrip(".git").split(":")[-1]
-    assert f"github.com/{slug}" in open(INDEX_HTML, encoding="utf-8").read()
+def test_source_url_is_consistent_everywhere():
+    """
+    AGPL section 13 makes this link an obligation, so the three places that
+    state it must agree. Checked against COPYRIGHT rather than `git remote`:
+    the canonical public URL must not depend on which checkout you are in
+    (the private repo has a different remote).
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    copyright_text = open(os.path.join(root, "COPYRIGHT"), encoding="utf-8").read()
+    match = re.search(r"Source code:\s*(\S+)", copyright_text)
+    assert match, "COPYRIGHT does not declare a source URL"
+    url = match.group(1).rstrip("/")
+
+    for rel in ("static/index.html", "static/app.js"):
+        with open(os.path.join(root, rel), encoding="utf-8") as f:
+            assert url in f.read(), f"{rel} does not point at {url}"
 
 
 def test_footer_reveal_is_keyboard_reachable():

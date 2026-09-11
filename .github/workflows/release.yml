@@ -5,8 +5,9 @@ on:
     tags:
       - 'v*' # Trigger on tags like v1.0, v2.3.1
 
+# Least privilege by default; only the release job needs write.
 permissions:
-  contents: write # Needed to create releases
+  contents: read
 
 jobs:
   build:
@@ -78,6 +79,8 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # only this job publishes the release
     steps:
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
@@ -85,7 +88,9 @@ jobs:
           path: artifacts
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        # Pinned to a commit: a floating tag on a third-party action would
+        # execute with contents: write if it were ever retagged.
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             artifacts/odbm/odbm

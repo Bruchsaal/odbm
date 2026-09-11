@@ -11,6 +11,7 @@ import webbrowser
 import oracledb
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -30,6 +31,26 @@ from logBroker import logger
 
 HOST = os.environ.get("ODBM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("ODBM_PORT", "9000"))
+
+
+def allowed_hosts():
+    """
+    Host header allow-list, which is what stops DNS rebinding.
+
+    Binding to localhost keeps the network out and the absence of CORS blocks
+    ordinary cross-origin reads, but neither stops a hostile page re-resolving
+    its own domain to 127.0.0.1: the browser then treats the response as
+    same-origin and readable. Since the API has no authentication, that would
+    hand over arbitrary SQL. Rejecting unexpected Host values closes it.
+    """
+    configured = os.environ.get("ODBM_ALLOWED_HOSTS", "").strip()
+    if configured:
+        return [h.strip() for h in configured.split(",") if h.strip()]
+    if HOST not in ("127.0.0.1", "localhost", "::1"):
+        # Deliberately exposed. The startup warning already covers the risk,
+        # and the operator can narrow it with ODBM_ALLOWED_HOSTS.
+        return ["*"]
+    return ["localhost", "127.0.0.1", "::1", "testserver"]
 
 # Files shipped inside the bundle and unpacked next to the executable on first
 # run. Credentials are deliberately NOT bundled - they are created empty here
@@ -164,6 +185,7 @@ def create_app():
         close_pools()
 
     app = FastAPI(title="ODBM", version="2.2", lifespan=lifespan)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts())
     lib = QueryLibrary()
     app.state.lib = lib
     collector.attach_library(lib)

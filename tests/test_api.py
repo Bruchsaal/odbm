@@ -426,3 +426,44 @@ def test_connections_carry_a_collect_flag(client):
         {"id": "", "name": "A", "user": "ua", "password": "p", "dsn": "da", "collect": True},
     ], "active_index": -1})
     assert client.get("/api/config").json()["connections"][0]["collect"] is True
+
+
+# ------------------------------------------------------------ DNS rebinding
+
+def test_rebinding_host_is_rejected(app):
+    """
+    Localhost binding and the absence of CORS do not stop DNS rebinding: a
+    hostile page re-resolves its own domain to 127.0.0.1, and the browser then
+    treats the response as same-origin. With no authentication that is
+    arbitrary SQL, so unexpected Host headers must be refused.
+    """
+    from fastapi.testclient import TestClient
+    with TestClient(app) as c:
+        res = c.get("/api/config", headers={"Host": "evil.example.com"})
+        assert res.status_code == 400
+
+
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "localhost:9000", "127.0.0.1:9000"])
+def test_legitimate_hosts_are_accepted(app, host):
+    from fastapi.testclient import TestClient
+    with TestClient(app) as c:
+        assert c.get("/api/config", headers={"Host": host}).status_code == 200
+
+
+def test_allowed_hosts_defaults_to_loopback(monkeypatch):
+    monkeypatch.delenv("ODBM_ALLOWED_HOSTS", raising=False)
+    monkeypatch.setattr(main, "HOST", "127.0.0.1")
+    assert "evil.example.com" not in main.allowed_hosts()
+    assert "127.0.0.1" in main.allowed_hosts()
+
+
+def test_allowed_hosts_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("ODBM_ALLOWED_HOSTS", "odbm.internal, 10.0.0.5")
+    assert main.allowed_hosts() == ["odbm.internal", "10.0.0.5"]
+
+
+def test_deliberate_exposure_does_not_break_access(monkeypatch):
+    """Binding 0.0.0.0 is already a loud opt-out; do not also break the UI."""
+    monkeypatch.delenv("ODBM_ALLOWED_HOSTS", raising=False)
+    monkeypatch.setattr(main, "HOST", "0.0.0.0")
+    assert main.allowed_hosts() == ["*"]
